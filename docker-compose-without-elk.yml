@@ -1,84 +1,9 @@
 version: "3.9"
 
 services:
-  # Redis - хранилище для очереди продуктов на одобрение
-  redis:
-    image: redis:6.2
-    container_name: redis
-    ports:
-      - "6379:6379"
-    networks:
-      - app_network
-    deploy:
-      resources:
-        limits:
-          cpus: '0.2'
-          memory: 256MB
-      restart_policy:
-        condition: on-failure
-        max_attempts: 3
-        delay: 5s
-        window: 20s
-  # Kafka - брокер сообщений
-  kafka:
-    image: apache/kafka:3.8.0
-    container_name: kafka
-    environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
-      KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      KAFKA_LOG_DIRS: /var/lib/kafka/data
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
-      KAFKA_CLUSTER_ID: "5L6g3nShT-eMCtK--X86sw" # Cluster ID из логов
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-    ports:
-      - "9092:9092"
-      - "9093:9093"
-    volumes:
-      - /var/lib/kafka/data
-    networks:
-      - app_network
-    healthcheck:
-      test: [ "CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server kafka:9092 || exit 1" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 1GB
-
-  topic_creator:
-    image: apache/kafka:3.8.0
-    depends_on:
-      kafka:
-        condition: service_healthy
-    command: >
-      sh -c "/opt/kafka/bin/kafka-topics.sh --create --topic __consumer_offsets --partitions 50 --replication-factor 1 --bootstrap-server kafka:9092; "
-    networks:
-      - app_network
-
-  kafka-ui:
-    container_name: kafka-ui
-    image: provectuslabs/kafka-ui:latest
-    ports:
-      - 9095:8080
-    depends_on:
-      kafka:
-        condition: service_healthy
-    environment:
-      KAFKA_CLUSTERS_0_NAME: kafka
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
-    networks:
-      - app_network
-
-  db_auth:
+  db:
     image: postgres:12-bullseye
-    container_name: postgres_auth_db
+    container_name: postgres_db
     environment:
       POSTGRES_USER: storage_admin # Задать пользователя
       POSTGRES_PASSWORD: THw7l0bxvPPkWUhP # Задать пароль
@@ -86,8 +11,8 @@ services:
     ports:
       - "5435:5432" # Открыть порт для внешнего доступа
     volumes:
-      - ./docker-data/auth_db:/var/lib/postgresql/data
-      - ./auth_service/db_init/init.sql:/docker-entrypoint-initdb.d/init.sql # Путь к папке с SQL-скриптами
+      - ./docker-data/postgres:/var/lib/postgresql/data
+      - ./db_init/init.sql:/docker-entrypoint-initdb.d/init.sql # Путь к папке с SQL-скриптами
     networks:
       - app_network
     deploy:
@@ -101,96 +26,19 @@ services:
         delay: 5s
         window: 20s
 
-  db_products:
-    image: postgres:12-bullseye
-    container_name: postgres_products_db
-    environment:
-      POSTGRES_USER: storage_admin # Задать пользователя
-      POSTGRES_PASSWORD: THw7l0bxvPPkWUhP # Задать пароль
-      POSTGRES_DB: strg_products_db # Задать имя БД
-    ports:
-      - "5436:5432" # Открыть порт для внешнего доступа
-    volumes:
-      - ./docker-data/products_db:/var/lib/postgresql/data
-      - ./products_service/db_init/init_products.sql:/docker-entrypoint-initdb.d/init.sql # Путь к папке с SQL-скриптами
-    networks:
-      - app_network
-    deploy:
-      resources:
-        limits:
-          cpus: '0.3'
-          memory: 512MB
-      restart_policy:
-        condition: on-failure
-        max_attempts: 3
-        delay: 5s
-        window: 20s
-
-  db_orders:
-    image: postgres:12-bullseye
-    container_name: postgres_orders_db
-    environment:
-      POSTGRES_USER: storage_admin # Задать пользователя
-      POSTGRES_PASSWORD: THw7l0bxvPPkWUhP # Задать пароль
-      POSTGRES_DB: strg_orders_db # Задать имя БД
-    ports:
-      - "5437:5432" # Открыть порт для внешнего доступа
-    volumes:
-      - ./docker-data/orders_db:/var/lib/postgresql/data
-      - ./orders_service/db_init/init_orders.sql:/docker-entrypoint-initdb.d/init.sql # Путь к папке с SQL-скриптами
-    networks:
-      - app_network
-    deploy:
-      resources:
-        limits:
-          cpus: '0.3'
-          memory: 512MB
-      restart_policy:
-        condition: on-failure
-        max_attempts: 3
-        delay: 5s
-        window: 20s
-
-  db_chats:
-    image: postgres:12-bullseye
-    container_name: postgres_chats_db
-    environment:
-      POSTGRES_USER: chat_user # Задать пользователя
-      POSTGRES_PASSWORD: THw7l0bxvPPkWUhP # Задать пароль
-      POSTGRES_DB: chat_db # Задать имя БД
-    ports:
-      - "5440:5432" # Открыть порт для внешнего доступа
-    volumes:
-      - ./docker-data/chat_db:/var/lib/postgresql/data
-      - ./chat_service/db_init/init_chat.sql:/docker-entrypoint-initdb.d/init.sql # Путь к папке с SQL-скриптами
-    networks:
-      - app_network
-    deploy:
-      resources:
-        limits:
-          cpus: '0.3'
-          memory: 512MB
-      restart_policy:
-        condition: on-failure
-        max_attempts: 3
-        delay: 5s
-        window: 20s
-
-  auth_service:
+  app:
     build:
-      context: ./auth_service
+      context: . # Путь к папке с кодом приложения
       dockerfile: Dockerfile
-    container_name: auth_service
+    container_name: python_app
     volumes:
-      - ./auth_service/logs:/app/logs
+      - ./logs:/app/logs
     depends_on:
-      kafka:
-        condition: service_healthy
+      - db
     environment:
       DATABASE_URL: postgresql://storage_admin:THw7l0bxvPPkWUhP@db:5432/strg_users_db
-      REDIS_HOST: redis
     ports:
-      - "8001:8000" # Открыть порт для FastAPI или другого веб-сервиса
+      - "8000:8000" # Открыть порт для FastAPI или другого веб-сервиса
     networks:
       - app_network
     deploy:
@@ -204,89 +52,9 @@ services:
         delay: 5s
         window: 20s
 
-  products_service:
-    build:
-      context: ./products_service
-      dockerfile: Dockerfile
-    container_name: products_service
-    volumes:
-      - ./products_service/logs:/app/logs
-    depends_on:
-      kafka:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: postgresql://storage_admin:THw7l0bxvPPkWUhP@db_products:5432/strg_products_db
-      REDIS_HOST: redis
-    ports:
-      - "8002:8000" # Открываем порт для сервиса продуктов
-    networks:
-      - app_network
-    deploy:
-      resources:
-        limits:
-          cpus: '0.3'
-          memory: 512MB
-      restart_policy:
-        condition: on-failure
-        max_attempts: 3
-        delay: 5s
-        window: 20s
+volumes:
+  postgres_data:
 
-  orders_service:
-    build:
-      context: ./orders_service
-      dockerfile: Dockerfile
-    container_name: orders_service
-    volumes:
-      - ./orders_service/logs:/app/logs
-    depends_on:
-      kafka:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: postgresql://storage_admin:THw7l0bxvPPkWUhP@db_orders:5432/strg_orders_db
-      REDIS_HOST: redis
-    ports:
-      - "8003:8000" # Открываем порт для сервиса заказов
-    networks:
-      - app_network
-    deploy:
-      resources:
-        limits:
-          cpus: '0.3'
-          memory: 512MB
-      restart_policy:
-        condition: on-failure
-        max_attempts: 3
-        delay: 5s
-        window: 20s
-
-  chat_service:
-    build:
-      context: ./chat_service
-      dockerfile: Dockerfile
-    container_name: chat_service
-    volumes:
-      - ./chat_service/logs:/app/logs
-    depends_on:
-      kafka:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: postgresql://chat_user:THw7l0bxvPPkWUhP@db_chats:5432/chat_db
-      REDIS_HOST: redis
-    ports:
-      - "8004:8000" # Открываем порт для сервиса заказов
-    networks:
-      - app_network
-    deploy:
-      resources:
-        limits:
-          cpus: '0.3'
-          memory: 512MB
-      restart_policy:
-        condition: on-failure
-        max_attempts: 3
-        delay: 5s
-        window: 20s
 
 networks:
   app_network:
