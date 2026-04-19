@@ -23,7 +23,7 @@ redis_client = redis.Redis(host='redis', port=6379, db=0)
 security = HTTPBearer()
 
 
-@router.post("/remove-from-pending/")
+@router.post("/remove-from-pending/", tags=["Approval"], summary="Remove product from approval queue")
 def remove_from_pending(product: schemas.ProductIdSchema):
     """
     Удаляет product_id из очереди на одобрение в Redis.
@@ -40,7 +40,7 @@ def remove_from_pending(product: schemas.ProductIdSchema):
             status_code=500, detail=f"Error removing product from Redis: {str(e)}")
 
 
-@router.post("/refresh-token", response_model=schemas.TokenResponseSchema, include_in_schema=False)
+@router.post("/refresh-token", response_model=schemas.TokenResponseSchema, tags=["Auth"], summary="Refresh access token")
 async def refresh_token_endpoint(request: Request, db: Session = Depends(get_session_local)):
     refresh_token = request.cookies.get("refresh_token")
     if not refresh_token:
@@ -51,7 +51,7 @@ async def refresh_token_endpoint(request: Request, db: Session = Depends(get_ses
     return auth.refresh_access_token(refresh_token, db)
 
 
-@router.post("/logout", include_in_schema=False)
+@router.post("/logout", response_model=schemas.LogoutResponseSchema, tags=["Auth"], summary="Logout current user")
 async def logout(request: Request, response: Response, db: Session = Depends(get_session_local)):
     refresh_token = request.cookies.get("refresh_token")
     if refresh_token:
@@ -62,12 +62,12 @@ async def logout(request: Request, response: Response, db: Session = Depends(get
 
 
 # Рендеринг страницы регистрации
-@router.get("/register/", include_in_schema=False)
+@router.get("/register", include_in_schema=False)
 def register_page(request: Request):
     return templates.TemplateResponse("register.html", {"request": request})
 
 
-@router.post("/register/", response_model=schemas.RegistrationResponse, status_code=status.HTTP_201_CREATED, responses={
+@router.post("/register", response_model=schemas.RegistrationResponse, status_code=status.HTTP_201_CREATED, responses={
     201: {"description": "User successfully created", "model": schemas.RegistrationResponse},
     422: {"description": "Email already registered or invalid data"},
 }, tags=["Profile"], summary="Register new user")
@@ -120,13 +120,13 @@ def register_user(user: schemas.UserCreate, db: Session = Depends(database.get_s
 
 
 # Рендеринг страницы авторизации
-@router.get("/login/", include_in_schema=False)
+@router.get("/login", include_in_schema=False)
 def register_page(request: Request):
     return templates.TemplateResponse("login.html", {"request": request})
 
 
 # Авторизация пользователя и перенаправление на страницу store
-@router.post("/login/", response_model=schemas.LoginResponse, tags=["Profile"], summary="Login in system", responses={
+@router.post("/login", response_model=schemas.LoginResponse, tags=["Auth"], summary="Login in system", responses={
     200: {"description": "User successfully logged in", "model": schemas.LoginResponse},
     400: {"description": "Invalid email or password"}
 })
@@ -220,7 +220,7 @@ def promote_user_to_superadmin(user_id: str,
 
 
 # Получение списка пользователей (только для супер-админа)
-@router.get("/users/", response_model=schemas.PaginatedUserResponse, tags=["Superadmin"], summary="Get users")
+@router.get("/users", response_model=schemas.PaginatedUserResponse, tags=["Superadmin"], summary="Get users")
 def get_users(
     db: Session = Depends(get_session_local),
     credentials: HTTPAuthorizationCredentials = Depends(security),
@@ -405,7 +405,7 @@ def delete_user(user_id: str,
     return {"detail": "User successfully deleted"}
 
 
-@router.get("/get-pending-products/", summary="Get list of products pending approval")
+@router.get("/get-pending-products/", tags=["Approval"], summary="Get list of products pending approval")
 def get_pending_products(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(database.get_session_local)
@@ -451,7 +451,7 @@ def get_pending_products(
     return products_data
 
 
-@router.get("/user_name/{user_id}")
+@router.get("/user_name/{user_id}", tags=["Chat"], summary="Get user display name")
 def get_user_name(user_id: uuid.UUID, db: Session = Depends(database.get_session_local)):
     user = db.query(User).filter(User.id == user_id).first()
     if not user:

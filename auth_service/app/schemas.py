@@ -98,6 +98,31 @@ class TokenResponseSchema(BaseModel):
     access_token: str
 
 
+class TokenRequestSchema(BaseModel):
+    token: str = Field(..., example="your_access_token")
+
+
+class TokenValidationResponseSchema(BaseModel):
+    valid: bool
+    user_id: Optional[str] = None
+    error: Optional[str] = None
+
+
+class TokenValidationWithAdminResponseSchema(BaseModel):
+    valid: bool
+    user_id: Optional[str] = None
+    is_superadmin: Optional[bool] = None
+    error: Optional[str] = None
+
+
+class LogoutResponseSchema(BaseModel):
+    detail: str
+
+
+class SuperadminStatusResponseSchema(BaseModel):
+    is_superadmin: bool
+
+
 class UserUpdate(BaseModel):
     email: Optional[EmailStr]  # Email является необязательным
     # Имя также является необязательным

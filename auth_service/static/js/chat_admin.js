@@ -36,11 +36,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 /**
- * Получаем список всех пользователей (GET /users/).
+ * Получаем список всех пользователей (GET /users).
  */
 async function fetchAllUsers() {
     try {
-        const response = await fetch('/users/', {
+        const response = await fetch('/users', {
             headers: {
                 'Authorization': 'Bearer ' + token
             }

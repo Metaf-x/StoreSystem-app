@@ -64,7 +64,7 @@ document.addEventListener('DOMContentLoaded', function () {
         // Если валидация успешна
         if (valid) {
             // Отправка данных на сервер через fetch
-            fetch('/register/', {
+                fetch('/register', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -113,4 +113,3 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     });
 });
-

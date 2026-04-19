@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from app import routes, database, logger, crud, kafka
+from app import routes, database, logger, crud, kafka, schemas
 from sqlalchemy.orm import Session
 from app.models import User
 from app.database import get_session_local
@@ -119,7 +119,7 @@ def warehouse_page(
     })
 
 
-@app.get("/chat-ui", response_class=HTMLResponse)
+@app.get("/chat-ui", response_class=HTMLResponse, include_in_schema=False)
 def chat_ui(request: Request):
     # здесь можно какую-то логику проверить
     return templates.TemplateResponse("chats.html", {"request": request})
@@ -151,15 +151,15 @@ def custom_openapi():
     return app.openapi_schema
 
 
-@app.post("/verify-token", include_in_schema=False)
-async def verify_token_endpoint(request: Request, db: Session = Depends(get_session_local)):
+@app.post(
+    "/verify-token",
+    response_model=schemas.TokenValidationResponseSchema,
+    tags=["Auth"],
+    summary="Verify access token",
+)
+async def verify_token_endpoint(body: schemas.TokenRequestSchema, db: Session = Depends(get_session_local)):
     try:
-        body = await request.json()  # Получаем JSON-данные из тела запроса
-        token = body.get("token")  # Извлекаем токен
-        if not token:
-            raise HTTPException(status_code=422, detail="Token is required")
-
-        payload = verify_token(token, db)
+        payload = verify_token(body.token, db)
         logger.log_message(f"""Returning from verify_token_endpoint: valid=True, user_id={
                            payload.get('sub')}""")
         return {"valid": True, "user_id": payload.get("sub")}
@@ -167,19 +167,18 @@ async def verify_token_endpoint(request: Request, db: Session = Depends(get_sess
         return {"valid": False, "error": str(e.detail)}
 
 
-@app.post("/verify-token-with-admin", include_in_schema=False)
+@app.post(
+    "/verify-token-with-admin",
+    response_model=schemas.TokenValidationWithAdminResponseSchema,
+    tags=["Auth"],
+    summary="Verify access token and load admin flag",
+)
 async def verify_token_with_admin_endpoint(
-    request: Request, db: Session = Depends(get_session_local)
+    body: schemas.TokenRequestSchema, db: Session = Depends(get_session_local)
 ):
     try:
-        # Получаем JSON-данные из тела запроса
-        body = await request.json()
-        token = body.get("token")
-        if not token:
-            raise HTTPException(status_code=422, detail="Token is required")
-
         # Проверяем токен и извлекаем полезную нагрузку
-        payload = verify_token(token, db)
+        payload = verify_token(body.token, db)
         user_id = payload.get("sub")
 
         # Получаем пользователя из базы данных
@@ -202,7 +201,12 @@ async def verify_token_with_admin_endpoint(
         return {"valid": False, "error": "Unexpected error occurred"}
 
 
-@app.get("/check-superadmin", include_in_schema=False)
+@app.get(
+    "/check-superadmin",
+    response_model=schemas.SuperadminStatusResponseSchema,
+    tags=["Auth"],
+    summary="Check whether the current user is a superadmin",
+)
 async def check_superadmin(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_session_local)

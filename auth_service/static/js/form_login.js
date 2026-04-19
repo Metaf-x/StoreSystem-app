@@ -28,7 +28,7 @@ document.addEventListener('DOMContentLoaded', async function () {
         const rememberMe = document.getElementById('rememberMe').checked;
 
         try {
-            const response = await fetch('/login/', {
+            const response = await fetch('/login', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

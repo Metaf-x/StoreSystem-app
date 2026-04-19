@@ -44,7 +44,7 @@ function buildUsersUrl(page) {
         params.set("role", currentRoleFilter);
     }
 
-    return `/users/?${params.toString()}`;
+    return `/users?${params.toString()}`;
 }
 
 async function loadUsers(page = 1) {
