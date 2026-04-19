@@ -1,9 +1,9 @@
 # auth.py
-from datetime import datetime
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
 from fastapi import HTTPException, status, Depends
 from sqlalchemy.orm import Session
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from passlib.context import CryptContext
 from app.config import SECRET_KEY
 from app import logger
@@ -17,33 +17,41 @@ REFRESH_TOKEN_EXPIRE_DAYS = 7
 
 def create_tokens(data: dict, db: Session):
     user_id = data.get("sub")
+    issued_at = datetime.utcnow()
 
-    # Удаляем старый токен для пользователя
-    db.query(Token).filter(Token.user_id == user_id).delete()
-    db.commit()
-
-    # Создаем access token
     to_encode = data.copy()
-    access_expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_expire = issued_at + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": access_expire})
     access_token = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-    # Создаем refresh token с более длительным сроком действия
-    refresh_expire = datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    refresh_expire = issued_at + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
     refresh_token_data = data.copy()
     refresh_token_data.update({"exp": refresh_expire})
     refresh_token = jwt.encode(
         refresh_token_data, SECRET_KEY, algorithm=ALGORITHM)
 
-    # Сохраняем токены в БД
-    new_token = Token(
-        access_token=access_token,
-        refresh_token=refresh_token,
-        user_id=user_id,
-        expires_at=access_expire,
-        refresh_expires_at=refresh_expire
+    token_values = {
+        "user_id": user_id,
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "created_at": issued_at,
+        "expires_at": access_expire,
+        "refresh_expires_at": refresh_expire,
+    }
+
+    # Upsert the token row atomically so concurrent logins cannot race between delete and insert.
+    insert_stmt = pg_insert(Token.__table__).values(token_values)
+    upsert_stmt = insert_stmt.on_conflict_do_update(
+        index_elements=[Token.__table__.c.user_id],
+        set_={
+            "access_token": insert_stmt.excluded.access_token,
+            "refresh_token": insert_stmt.excluded.refresh_token,
+            "created_at": insert_stmt.excluded.created_at,
+            "expires_at": insert_stmt.excluded.expires_at,
+            "refresh_expires_at": insert_stmt.excluded.refresh_expires_at,
+        },
     )
-    db.add(new_token)
+    db.execute(upsert_stmt)
     db.commit()
 
     logger.log_message(f"Created new access and refresh tokens for: {user_id}")
