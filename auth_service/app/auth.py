@@ -111,9 +111,14 @@ def refresh_access_token(refresh_token: str, db: Session):
         ) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         db.commit()
 
-        return {"access_token": new_access_token}
+        return {"user_id": user_id, "access_token": new_access_token}
     except JWTError:
         raise HTTPException(status_code=403, detail="Invalid refresh token")
+
+
+def revoke_refresh_token(refresh_token: str, db: Session):
+    db.query(Token).filter(Token.refresh_token == refresh_token).delete()
+    db.commit()
 
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")

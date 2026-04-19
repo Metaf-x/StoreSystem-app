@@ -1,6 +1,6 @@
 # routes.py
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi import APIRouter, Depends, HTTPException, Request, status, Path
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status, Path, Query
 import uuid
 from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from app.database import get_session_local
 import requests
 import redis
+from typing import Optional
 from app.approval_queue import remove_product_from_pending
 
 
@@ -39,37 +40,25 @@ def remove_from_pending(product: schemas.ProductIdSchema):
             status_code=500, detail=f"Error removing product from Redis: {str(e)}")
 
 
-@router.get("/get-user-token/{user_id}", response_model=schemas.Token, tags=["Profile"], summary="Get user token")
-def get_user_token(user_id: str, db: Session = Depends(database.get_session_local)):
-    # Попробуем получить токен из базы данных
-    token_record = crud.get_user_token(db, user_id=user_id)
-    logger.log_message(f"Token for user {user_id} found in DB.")
-    if not token_record:
-        logger.log_message(f"Token for user {user_id} not found in DB.")
-        raise HTTPException(status_code=404, detail="Token not found")
-
-    return {
-        "access_token": token_record.access_token,
-        "token_type": "bearer"
-    }
-
-
 @router.post("/refresh-token", response_model=schemas.TokenResponseSchema, include_in_schema=False)
 async def refresh_token_endpoint(request: Request, db: Session = Depends(get_session_local)):
-    try:
-        body = await request.json()
-        refresh_token = body.get("refresh_token")
+    refresh_token = request.cookies.get("refresh_token")
+    if not refresh_token:
+        raise HTTPException(
+            status_code=401, detail="Refresh token is required")
 
-        if not refresh_token:
-            raise HTTPException(
-                status_code=422, detail="Refresh token is required")
+    # Получаем новый access token
+    return auth.refresh_access_token(refresh_token, db)
 
-        # Получаем новый access token
-        new_token_data = auth.refresh_access_token(refresh_token, db)
-        return new_token_data
 
-    except HTTPException as e:
-        return {"detail": e.detail}
+@router.post("/logout", include_in_schema=False)
+async def logout(request: Request, response: Response, db: Session = Depends(get_session_local)):
+    refresh_token = request.cookies.get("refresh_token")
+    if refresh_token:
+        auth.revoke_refresh_token(refresh_token, db)
+
+    response.delete_cookie(key="refresh_token", path="/")
+    return {"detail": "Logged out"}
 
 
 # Рендеринг страницы регистрации
@@ -141,7 +130,11 @@ def register_page(request: Request):
     200: {"description": "User successfully logged in", "model": schemas.LoginResponse},
     400: {"description": "Invalid email or password"}
 })
-def login_for_access_token(form_data: schemas.Login, db: Session = Depends(database.get_session_local)):
+def login_for_access_token(
+    form_data: schemas.Login,
+    response: Response,
+    db: Session = Depends(database.get_session_local)
+):
     user = crud.get_user_by_email(db, email=form_data.email)
     if not user or not auth.verify_password(form_data.password, user.hashed_password):
         logger.log_message(f"""Failed login attempt for email: {
@@ -152,13 +145,25 @@ def login_for_access_token(form_data: schemas.Login, db: Session = Depends(datab
     user_id_str = str(user.id)
     tokens = auth.create_tokens(
         data={"sub": user_id_str, "is_superadmin": user.is_superadmin}, db=db)
+
+    cookie_kwargs = {
+        "key": "refresh_token",
+        "value": tokens["refresh_token"],
+        "httponly": True,
+        "samesite": "lax",
+        "path": "/",
+        "secure": False,
+    }
+    if form_data.remember_me:
+        cookie_kwargs["max_age"] = auth.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
+    response.set_cookie(**cookie_kwargs)
+
     logger.log_message(f"User is logged in: {form_data.email}")
 
     return {
         "user_id": user_id_str,
         "message": "User successfully logged in",
         "access_token": tokens["access_token"],
-        "refresh_token": tokens["refresh_token"],
         "token_type": "bearer"
     }
 
@@ -215,22 +220,64 @@ def promote_user_to_superadmin(user_id: str,
 
 
 # Получение списка пользователей (только для супер-админа)
-@router.get("/users/", response_model=list[schemas.UserResponse], tags=["Superadmin"], summary="Get users")
-def get_users(db: Session = Depends(get_session_local),
-              credentials: HTTPAuthorizationCredentials = Depends(security)):
+@router.get("/users/", response_model=schemas.PaginatedUserResponse, tags=["Superadmin"], summary="Get users")
+def get_users(
+    db: Session = Depends(get_session_local),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
+    sort_by: str = Query("name"),
+    order: str = Query("asc"),
+    search: Optional[str] = Query(default=None, max_length=200),
+    role: Optional[str] = Query(default=None),
+):
     # Получаем токен из заголовка Authorization
     token = credentials.credentials
 
     # Проверяем токен
     token_data = auth.verify_token(token, db=db)
     requesting_user = crud.get_user_by_id(db, uuid.UUID(token_data["sub"]))
+    if not requesting_user:
+        raise HTTPException(status_code=404, detail="User not found")
 
     if requesting_user.is_superadmin:
-        # Если пользователь супер-админ, возвращаем список всех пользователей
-        users = crud.get_users_for_superadmin(db)
+        allowed_sort_fields = {"id", "name", "email", "role"}
+        if sort_by not in allowed_sort_fields:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unsupported sort field: {sort_by}"
+            )
+
+        order_value = order.lower()
+        if order_value not in {"asc", "desc"}:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unsupported sort order: {order}"
+            )
+
+        allowed_role_filters = {None, "", "all", "user", "superadmin"}
+        if role not in allowed_role_filters:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unsupported role filter: {role}"
+            )
+
+        users, total = crud.get_users_for_superadmin(
+            db=db,
+            search=search,
+            role=None if role in {None, "", "all"} else role,
+            sort_by=sort_by,
+            sort_order=order_value,
+            page=page,
+            page_size=page_size,
+        )
     else:
-        # Если пользователь не супер-админ, возвращаем только его запись
+        # Non-superadmins only see their own record.
         users = [requesting_user]
+        total = 1
+        page = 1
+        page_size = 1
+        role = "user"
 
     result = []
     for user in users:
@@ -241,7 +288,15 @@ def get_users(db: Session = Depends(get_session_local),
             "role": "superadmin" if user.is_superadmin else "user"
         })
 
-    return result
+    total_pages = (total + page_size - 1) // page_size if total else 0
+
+    return {
+        "users": result,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+    }
 
 
 # Пример маршрута для редактирования пользователя с проверкой токена через HTTPBearer

@@ -5,6 +5,9 @@ from app.schemas import UserCreate, UserUpdate
 from app.auth import get_password_hash
 import uuid
 from app import logger, schemas
+from psycopg2 import sql
+from sqlalchemy import case, or_
+from typing import Optional
 
 
 def get_user_by_email(db: Session, email: str):
@@ -28,17 +31,36 @@ def create_user(db: Session, user: UserCreate, is_superadmin: bool = False):
 
 
 def assign_role_to_user(db: Session, email: str, password: str):
+    role_name = email.strip().lower()
+
     # Открываем сырое SQL-соединение, чтобы выполнить SQL-запросы напрямую
     with db.connection().connection.cursor() as cursor:
         # SQL-запрос для создания нового пользователя в PostgreSQL и присвоения ему роли
-        create_user_sql = f"""
-        CREATE USER "{email}" WITH PASSWORD '{password}';
-        GRANT limited_user TO "{email}";
-        """
-        cursor.execute(create_user_sql)
+        cursor.execute(
+            sql.SQL("CREATE USER {} WITH PASSWORD %s").format(
+                sql.Identifier(role_name)
+            ),
+            (password,),
+        )
+        cursor.execute(
+            sql.SQL("GRANT limited_user TO {}").format(
+                sql.Identifier(role_name)
+            )
+        )
         db.commit()
         logger.log_message(
-            f"A user {email} has been created in PostgreSQL with role limited_user")
+            f"A user {role_name} has been created in PostgreSQL with role limited_user")
+
+
+def drop_role_for_user(db: Session, email: str):
+    role_name = email.strip().lower()
+
+    with db.connection().connection.cursor() as cursor:
+        cursor.execute(
+            sql.SQL("DROP USER IF EXISTS {}").format(
+                sql.Identifier(role_name)
+            )
+        )
 
 
 def promote_to_superadmin(db: Session, user_id: uuid.UUID):
@@ -54,8 +76,54 @@ def promote_to_superadmin(db: Session, user_id: uuid.UUID):
     return user
 
 
-def get_users_for_superadmin(db: Session):
-    return db.query(User).all()
+def get_users_for_superadmin(
+    db: Session,
+    search: Optional[str] = None,
+    role: Optional[str] = None,
+    sort_by: str = "name",
+    sort_order: str = "asc",
+    page: int = 1,
+    page_size: int = 10,
+):
+    query = db.query(User)
+
+    if role == "superadmin":
+        query = query.filter(User.is_superadmin.is_(True))
+    elif role == "user":
+        query = query.filter(User.is_superadmin.is_(False))
+
+    if search:
+        search_value = f"%{search.strip()}%"
+        query = query.filter(
+            or_(
+                User.name.ilike(search_value),
+                User.email.ilike(search_value),
+            )
+        )
+
+    total = query.count()
+
+    sort_map = {
+        "id": User.id,
+        "name": User.name,
+        "email": User.email,
+        "role": case((User.is_superadmin.is_(True), 1), else_=0),
+    }
+
+    sort_column = sort_map.get(sort_by, User.name)
+    if sort_order == "desc":
+        sort_expression = sort_column.desc()
+    else:
+        sort_expression = sort_column.asc()
+
+    users = (
+        query.order_by(sort_expression, User.id.asc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+
+    return users, total
 
 
 def get_user_by_id(db: Session, user_id: uuid.UUID):
@@ -85,27 +153,16 @@ def delete_user(db: Session, user_id: str):  # Удаление пользова
         # Возвращаем None, если пользователь не найден
         return None
 
-        # Удаляем связанные токены пользователя
+    user_email = user.email
+
+    # Удаляем связанные токены пользователя
     token = db.query(Token).filter(Token.user_id == str(user_id)).first()
     if token:
         db.delete(token)
-        db.commit()  # Фиксируем удаление токена
 
+    drop_role_for_user(db, user_email)
     db.delete(user)
     db.commit()
-
-    with db.connection().connection.cursor() as cursor:
-        # SQL-запрос для создания нового пользователя в PostgreSQL и присвоения ему роли
-        create_user_sql = f"""
-        DROP USER "{user.email.lower()}";
-        """
-        cursor.execute(create_user_sql)
-        db.commit()
-
     logger.log_message(
-        f"User {user.email} has been deleted from the database")
+        f"User {user_email} has been deleted from the database")
     return user
-
-
-def get_user_token(db: Session, user_id: str):
-    return db.query(Token).filter(Token.user_id == user_id).first()

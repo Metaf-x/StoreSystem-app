@@ -9,7 +9,7 @@ const sendBtn = document.getElementById('send-btn');
 
 const userNamesCache = {};
 
-const userId = localStorage.getItem("user_id");
+let userId = null;
 
 let currentChatId = null;
 let currentChatWebSocket = null;
@@ -18,13 +18,21 @@ let token = null;
 
 // 1. При загрузке страницы запрашиваем список чатов
 document.addEventListener('DOMContentLoaded', async () => {
-    const token = await getTokenFromDatabase();
+    token = await getTokenFromDatabase();
 
     if (!token) {
         console.error("Токен недействителен, перенаправление на страницу логина");
         window.location.href = "/login";
         return;
     }
+
+    userId = getCurrentUserId();
+    if (!userId) {
+        console.error("Не удалось определить текущего пользователя. Перенаправление на страницу логина");
+        window.location.href = "/login";
+        return;
+    }
+
     await fetchChats(token);
 });
 
