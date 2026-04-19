@@ -7,18 +7,37 @@
 <h2>Список пользователей</h2>
 
 <!-- Поисковая строка для фильтрации пользователей -->
-<div class="mb-3">
-    <input type="text" id="search" class="form-control" placeholder="Поиск по имени или email">
+<div class="row g-2 mb-3">
+    <div class="col-md-6">
+        <input type="text" id="search" class="form-control" placeholder="Поиск по имени или email">
+    </div>
+    <div class="col-md-3">
+        <select id="roleFilter" class="form-select">
+            <option value="all" selected>Все роли</option>
+            <option value="user">Пользователи</option>
+            <option value="superadmin">Супер-админы</option>
+        </select>
+    </div>
+    <div class="col-md-2">
+        <select id="pageSizeSelect" class="form-select">
+            <option value="10" selected>10 / стр.</option>
+            <option value="20">20 / стр.</option>
+            <option value="50">50 / стр.</option>
+        </select>
+    </div>
+    <div class="col-md-1">
+        <button type="button" id="resetFilters" class="btn btn-outline-secondary w-100">Сбросить</button>
+    </div>
 </div>
 
 <!-- Таблица для отображения списка пользователей -->
 <table class="table table-striped mt-4">
     <thead>
         <tr>
-            <th>ID</th>
-            <th>Имя</th>
-            <th>Email</th>
-            <th>Роль</th>
+            <th class="sortable" data-sort="id" role="button">ID <span class="sort-indicator"></span></th>
+            <th class="sortable" data-sort="name" role="button">Имя <span class="sort-indicator"></span></th>
+            <th class="sortable" data-sort="email" role="button">Email <span class="sort-indicator"></span></th>
+            <th class="sortable" data-sort="role" role="button">Роль <span class="sort-indicator"></span></th>
             <th>Действия</th>
         </tr>
     </thead>
@@ -34,5 +53,5 @@
     </nav>
 </div>
 
-<script src="/static/js/userlist.js"></script>
+<script src="/static/js/userlist.js?v=20260418-3"></script>
 {% endblock %}

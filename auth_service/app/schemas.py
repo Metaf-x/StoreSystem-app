@@ -67,26 +67,19 @@ class RegistrationResponse(BaseModel):
 class Login(BaseModel):  # Модель для аутентификации пользователя (логин)
     email: EmailStr
     password: str
-
-    # Модель для успешного ответа на логин
-
-
-class LoginResponse(BaseModel):
-    message: str = Field("User successfully logged in")
-    access_token: str = Field(..., example="your_access_token")
-    token_type: str = Field("bearer", example="bearer")
+    remember_me: bool = False
 
 
 class LoginResponse(BaseModel):
     user_id: str
     message: str
     access_token: str
-    refresh_token: str
     token_type: str = "bearer"
 
     class Config:
         schema_extra = {
             "example": {
+                "user_id": "8d14a7ed-353c-4d58-9990-301d4c79665e",
                 "message": "User successfully logged in",
                 "access_token": "your_access_token",
                 "token_type": "bearer"
@@ -101,6 +94,7 @@ class Token(BaseModel):
 
 
 class TokenResponseSchema(BaseModel):
+    user_id: str
     access_token: str
 
 
@@ -144,6 +138,14 @@ class UserResponse(BaseModel):
 
     class Config:
         orm_mode = True
+
+
+class PaginatedUserResponse(BaseModel):
+    users: list[UserResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
 
 
 class ProductIdSchema(BaseModel):

@@ -1,4 +1,7 @@
 /my_env
-/logs
+*/logs
 /docker-data
 /.claude
+
+.DS_Store
+.idea

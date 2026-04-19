@@ -1,18 +1,23 @@
 // chat_admin.js
 
 let allUsers = [];       // список всех пользователей (id, name, email)
-let currentAdminId = null; // id текущего админа (берём из токена или localStorage)
+let currentAdminId = null; // id текущего админа (берём из in-memory auth state)
 
 /**
  * Инициализация после загрузки DOM
  */
 document.addEventListener('DOMContentLoaded', async () => {
-    // Предположим, у вас есть функция getTokenFromDatabase() + localStorage user_id
     token = await getTokenFromDatabase();
-    currentAdminId = localStorage.getItem('user_id');
 
     if (!token) {
         console.error("Нет валидного токена. Переходим на логин");
+        window.location.href = "/login";
+        return;
+    }
+
+    currentAdminId = getCurrentUserId();
+    if (!currentAdminId) {
+        console.error("Не удалось определить текущего пользователя. Переходим на логин");
         window.location.href = "/login";
         return;
     }
@@ -220,13 +225,4 @@ async function addOneUserToChat(chatId, userId) {
     } catch (err) {
         console.error("Ошибка addOneUserToChat:", err);
     }
-}
-
-/**
- * Пример заглушки getTokenFromDatabase()
- */
-async function getTokenFromDatabase() {
-    // Заглядывает в localStorage или делает запрос /get-user-token/{userId}
-    // Возвращает строку токена
-    return localStorage.getItem('access_token');
 }

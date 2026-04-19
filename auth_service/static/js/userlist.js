@@ -1,65 +1,98 @@
-//user_list.js
-// Объявляем переменные для списка всех пользователей и количества пользователей на странице
-let allUsers = [];
-const usersPerPage = 10;
+// user_list.js
+let currentPage = 1;
+let currentSortBy = "name";
+let currentSortOrder = "asc";
+let currentSearch = "";
+let currentRoleFilter = "all";
+let currentPageSize = 10;
+let searchTimeout = null;
+let authToken = null;
 
-// Загружаем токен и получаем список пользователей при загрузке страницы
 document.addEventListener("DOMContentLoaded", async function () {
-    console.log("Page loaded, starting token retrieval...");
     const token = await getTokenFromDatabase();
 
     if (!token) {
-        console.log("No token found, redirecting to login page.");
-        // Перенаправляем на страницу логина, если токен отсутствует
         window.location.href = '/login';
         return;
     }
-    else {
-        console.log("Token retrieved successfully, loading user list...");
-        getUserList(token);
-    }
+
+    authToken = token;
+    bindSortHandlers();
+    bindSearchHandler();
+    bindFilterHandler();
+    bindPageSizeHandler();
+    loadUsers(1).catch(error => {
+        console.error("Error loading users:", error);
+        alert(error.message);
+    });
 });
 
+function buildUsersUrl(page) {
+    const params = new URLSearchParams({
+        page: String(page),
+        page_size: String(currentPageSize),
+        sort_by: currentSortBy,
+        order: currentSortOrder,
+    });
 
-// Функция для получения списка пользователей с API
-function getUserList(token) {
-    console.log("Fetching user list with provided token:", token);
-    fetch('/users/', {
-        method: 'GET',
-        headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-        }
-    })
-        .then(response => {
-            console.log("User list response status:", response.status);
-            return response.json();  // Получаем JSON с данными пользователей
-        })
-        .then(data => {
-            console.log("User list data:", data);  // Лог данных
-            if (Array.isArray(data)) {
-                allUsers = data;  // Сохраняем всех пользователей
-                renderUserTable(allUsers.slice(0, usersPerPage));  // Показываем первую страницу
-                renderPagination(Math.ceil(allUsers.length / usersPerPage));
-            } else {
-                console.error("User list is not in expected format");
-            }
-        })
-        .catch(error => {
-            console.error("Error fetching user list:", error);
-            //window.location.href = '/login';
-        });
+    const searchValue = currentSearch.trim();
+    if (searchValue) {
+        params.set("search", searchValue);
+    }
+
+    if (currentRoleFilter !== "all") {
+        params.set("role", currentRoleFilter);
+    }
+
+    return `/users/?${params.toString()}`;
 }
 
-// Функция для рендеринга таблицы пользователей
-function renderUserTable(users) {
-    const userTableBody = document.getElementById('userTableBody');
-    if (!userTableBody) {
-        console.error("Error: userTableBody element not found on the page.");
+async function loadUsers(page = 1) {
+    currentPage = page;
+
+    const response = await fetch(buildUsersUrl(page), {
+        method: 'GET',
+        headers: {
+            'Authorization': `Bearer ${authToken}`,
+            'Content-Type': 'application/json'
+        }
+    });
+
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || `Failed to load users (${response.status})`);
+    }
+
+    const data = await response.json();
+    const users = Array.isArray(data) ? data : data.users;
+    if (!Array.isArray(users)) {
+        console.error("User list is not in expected format");
         return;
     }
 
-    userTableBody.innerHTML = '';  // Очищаем таблицу перед добавлением новых данных
+    currentPage = data.page || page;
+    const totalPages = data.total_pages || data.totalPages || (data.total ? Math.ceil(data.total / currentPageSize) : 0);
+    renderUserTable(users);
+    renderPagination(totalPages, currentPage);
+    updateSortIndicators();
+}
+
+function renderUserTable(users) {
+    const userTableBody = document.getElementById('userTableBody');
+    if (!userTableBody) {
+        return;
+    }
+
+    userTableBody.innerHTML = '';
+
+    if (!users.length) {
+        const emptyRow = document.createElement('tr');
+        emptyRow.innerHTML = `
+            <td colspan="5" class="text-center text-muted">Пользователи не найдены</td>
+        `;
+        userTableBody.appendChild(emptyRow);
+        return;
+    }
 
     users.forEach(user => {
         const row = document.createElement('tr');
@@ -72,9 +105,7 @@ function renderUserTable(users) {
     `;
         userTableBody.appendChild(row);
     });
-    console.log("User table rendered successfully.");
 
-    // Добавляем обработчик для всех кнопок "Повысить до супер-админа"
     document.querySelectorAll(".promote-btn").forEach(button => {
         button.addEventListener("click", function () {
             const userId = this.getAttribute("data-id");
@@ -83,47 +114,147 @@ function renderUserTable(users) {
     });
 }
 
-// Функция для рендеринга элементов управления страницей
-function renderPagination(totalPages) {
+function renderPagination(totalPages, activePage) {
     const paginationContainer = document.getElementById('paginationContainer');
+    if (!paginationContainer) {
+        return;
+    }
+
     paginationContainer.innerHTML = '';
+
+    if (totalPages <= 1) {
+        return;
+    }
 
     for (let page = 1; page <= totalPages; page++) {
         const pageItem = document.createElement('li');
-        pageItem.className = 'page-item';
+        pageItem.className = `page-item${page === activePage ? ' active' : ''}`;
         pageItem.innerHTML = `<a class="page-link" href="#">${page}</a>`;
 
         pageItem.addEventListener('click', (e) => {
             e.preventDefault();
-            const start = (page - 1) * usersPerPage;
-            const end = start + usersPerPage;
-            renderUserTable(allUsers.slice(start, end));
+            loadUsers(page).catch(error => {
+                console.error("Error loading users page:", error);
+                alert(error.message);
+            });
         });
 
         paginationContainer.appendChild(pageItem);
     }
 }
 
-// Поиск по таблице пользователей
-document.getElementById('search').addEventListener('input', function () {
-    const searchValue = this.value.toLowerCase();
-    const rows = document.querySelectorAll('#userTableBody tr');
+function bindSearchHandler() {
+    const searchInput = document.getElementById('search');
+    if (!searchInput) {
+        return;
+    }
 
-    rows.forEach(row => {
-        const name = row.querySelector('td:nth-child(2)').textContent.toLowerCase();
-        const email = row.querySelector('td:nth-child(3)').textContent.toLowerCase();
+    searchInput.addEventListener('input', function () {
+        currentSearch = this.value;
 
-        if (name.includes(searchValue) || email.includes(searchValue)) {
-            row.style.display = '';
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(() => {
+            loadUsers(1).catch(error => {
+                console.error("Error loading filtered users:", error);
+                alert(error.message);
+            });
+        }, 300);
+    });
+}
+
+function bindFilterHandler() {
+    const roleFilter = document.getElementById('roleFilter');
+    const resetFilters = document.getElementById('resetFilters');
+    const pageSizeSelect = document.getElementById('pageSizeSelect');
+
+    if (roleFilter) {
+        roleFilter.addEventListener('change', function () {
+            currentRoleFilter = this.value;
+            loadUsers(1).catch(error => {
+                console.error("Error loading filtered users:", error);
+                alert(error.message);
+            });
+        });
+    }
+
+    if (resetFilters) {
+        resetFilters.addEventListener('click', function () {
+            currentSearch = "";
+            currentRoleFilter = "all";
+            currentPageSize = 10;
+            searchTimeout = null;
+
+            const searchInput = document.getElementById('search');
+            if (searchInput) {
+                searchInput.value = "";
+            }
+            if (roleFilter) {
+                roleFilter.value = "all";
+            }
+            if (pageSizeSelect) {
+                pageSizeSelect.value = "10";
+            }
+
+            loadUsers(1).catch(error => {
+                console.error("Error resetting user filters:", error);
+                alert(error.message);
+            });
+        });
+    }
+}
+
+function bindPageSizeHandler() {
+    const pageSizeSelect = document.getElementById('pageSizeSelect');
+    if (!pageSizeSelect) {
+        return;
+    }
+
+    pageSizeSelect.addEventListener('change', function () {
+        currentPageSize = parseInt(this.value, 10) || 10;
+        loadUsers(1).catch(error => {
+            console.error("Error loading users after page size change:", error);
+            alert(error.message);
+        });
+    });
+}
+
+function bindSortHandlers() {
+    document.querySelectorAll('[data-sort]').forEach(header => {
+        header.addEventListener('click', () => {
+            const sortBy = header.getAttribute('data-sort');
+            if (currentSortBy === sortBy) {
+                currentSortOrder = currentSortOrder === 'asc' ? 'desc' : 'asc';
+            } else {
+                currentSortBy = sortBy;
+                currentSortOrder = sortBy === 'role' ? 'desc' : 'asc';
+            }
+
+            loadUsers(1).catch(error => {
+                console.error("Error loading sorted users:", error);
+                alert(error.message);
+            });
+        });
+    });
+}
+
+function updateSortIndicators() {
+    document.querySelectorAll('[data-sort]').forEach(header => {
+        const indicator = header.querySelector('.sort-indicator');
+        if (!indicator) {
+            return;
+        }
+
+        const sortBy = header.getAttribute('data-sort');
+        if (sortBy === currentSortBy) {
+            indicator.textContent = currentSortOrder === 'asc' ? ' ▲' : ' ▼';
         } else {
-            row.style.display = 'none';
+            indicator.textContent = '';
         }
     });
-});
+}
 
-// Функция для повышения пользователя до супер-админа
 async function promoteUserToSuperadmin(userId) {
-    const token = await getTokenFromDatabase();
+    const token = authToken || await getTokenFromDatabase();
     fetch(`/users/promote/${userId}`, {
         method: 'PUT',
         headers: {
@@ -134,7 +265,10 @@ async function promoteUserToSuperadmin(userId) {
         .then(response => {
             if (response.ok) {
                 alert("User successfully promoted to super admin.");
-                getUserList(token);  // Обновляем список пользователей после повышения
+                authToken = token;
+                loadUsers(currentPage).catch(error => {
+                    console.error("Error reloading users after promotion:", error);
+                });
             } else {
                 return response.json().then(data => {
                     throw new Error(data.detail);
