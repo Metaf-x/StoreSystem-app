@@ -18,16 +18,21 @@ def create_user(db: Session, user: UserCreate, is_superadmin: bool = False):
     hashed_password = get_password_hash(user.password)
     db_user = User(id=uuid.uuid4(), email=user.email,
                    name=user.name, hashed_password=hashed_password)
-    db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
-    logger.log_message(
-        f"""A user has been created in the database: {user.email}""")
+    try:
+        # Синхронизируем PostgreSQL-роль до коммита, чтобы откатить все изменения
+        # в одной транзакции, если что-то пойдет не так.
+        assign_role_to_user(db, user.email, user.password)
 
-    # Создаем пользователя в PostgreSQL с ролью limited_user
-    assign_role_to_user(db, user.email, user.password)
+        db.add(db_user)
+        db.commit()
+        db.refresh(db_user)
+        logger.log_message(
+            f"""A user has been created in the database: {user.email}""")
 
-    return db_user
+        return db_user
+    except Exception:
+        db.rollback()
+        raise
 
 
 def assign_role_to_user(db: Session, email: str, password: str):
@@ -35,21 +40,33 @@ def assign_role_to_user(db: Session, email: str, password: str):
 
     # Открываем сырое SQL-соединение, чтобы выполнить SQL-запросы напрямую
     with db.connection().connection.cursor() as cursor:
-        # SQL-запрос для создания нового пользователя в PostgreSQL и присвоения ему роли
-        cursor.execute(
-            sql.SQL("CREATE USER {} WITH PASSWORD %s").format(
-                sql.Identifier(role_name)
-            ),
-            (password,),
-        )
+        # Если роль уже существует, обновляем пароль вместо падения на duplicate object.
+        cursor.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role_name,))
+        role_exists = cursor.fetchone() is not None
+
+        if role_exists:
+            cursor.execute(
+                sql.SQL("ALTER USER {} WITH PASSWORD %s").format(
+                    sql.Identifier(role_name)
+                ),
+                (password,),
+            )
+        else:
+            # SQL-запрос для создания нового пользователя в PostgreSQL и присвоения ему роли
+            cursor.execute(
+                sql.SQL("CREATE USER {} WITH PASSWORD %s").format(
+                    sql.Identifier(role_name)
+                ),
+                (password,),
+            )
+
         cursor.execute(
             sql.SQL("GRANT limited_user TO {}").format(
                 sql.Identifier(role_name)
             )
         )
-        db.commit()
         logger.log_message(
-            f"A user {role_name} has been created in PostgreSQL with role limited_user")
+            f"A PostgreSQL role for {role_name} has been synchronized with role limited_user")
 
 
 def drop_role_for_user(db: Session, email: str):
