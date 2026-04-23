@@ -128,7 +128,7 @@ async function openChat(chatId, chatName) {
 
 
     // Создаём новое соединение
-    const wsUrl = `ws://${window.location.hostname}:8004/ws/${chatId}/${userId}`;
+    const wsUrl = `ws://${window.location.hostname}:8004/ws/${chatId}/${userId}?token=${encodeURIComponent(token)}`;
     console.log(`[WS] Подключаемся к: ${wsUrl}`);
     currentChatWebSocket = new WebSocket(wsUrl);
 

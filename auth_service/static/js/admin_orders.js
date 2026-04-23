@@ -1,3 +1,22 @@
+function renderAccessDenied() {
+    document.body.innerHTML = "<h2>Доступ запрещён</h2>";
+}
+
+document.addEventListener("superadmin-status-changed", (event) => {
+    if (!event.detail || typeof event.detail.isSuperAdmin !== "boolean") {
+        return;
+    }
+
+    if (!event.detail.isSuperAdmin) {
+        renderAccessDenied();
+        return;
+    }
+
+    if (document.body.innerHTML.includes("Доступ запрещён")) {
+        window.location.reload();
+    }
+});
+
 document.addEventListener("DOMContentLoaded", async function () {
     const ordersContainer = document.getElementById("ordersContainer");
     const filtersForm = document.getElementById("filtersForm");
@@ -11,7 +30,7 @@ document.addEventListener("DOMContentLoaded", async function () {
 
     const isAdmin = await checkAdmin(token);
     if (!isAdmin) {
-        document.body.innerHTML = "<h2>Доступ запрещён</h2>";
+        renderAccessDenied();
         return;
     }
 

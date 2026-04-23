@@ -44,11 +44,13 @@ def remove_from_pending(product: schemas.ProductIdSchema):
 async def refresh_token_endpoint(request: Request, db: Session = Depends(get_session_local)):
     refresh_token = request.cookies.get("refresh_token")
     if not refresh_token:
-        raise HTTPException(
-            status_code=401, detail="Refresh token is required")
+        return {"user_id": None, "access_token": None}
 
-    # Получаем новый access token
-    return auth.refresh_access_token(refresh_token, db)
+    try:
+        # Получаем новый access token
+        return auth.refresh_access_token(refresh_token, db)
+    except HTTPException:
+        return {"user_id": None, "access_token": None}
 
 
 @router.post("/logout", response_model=schemas.LogoutResponseSchema, tags=["Auth"], summary="Logout current user")
@@ -144,7 +146,7 @@ def login_for_access_token(
 
     user_id_str = str(user.id)
     tokens = auth.create_tokens(
-        data={"sub": user_id_str, "is_superadmin": user.is_superadmin}, db=db)
+        data={"sub": user_id_str}, db=db)
 
     cookie_kwargs = {
         "key": "refresh_token",

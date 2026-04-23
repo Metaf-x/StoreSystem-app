@@ -151,15 +151,28 @@ def custom_openapi():
     return app.openapi_schema
 
 
+def _get_current_user_from_access_token(token: str, db: Session):
+    payload = verify_token(token)
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return user, user_id
+
+
 @app.post(
     "/verify-token",
     response_model=schemas.TokenValidationResponseSchema,
     tags=["Auth"],
     summary="Verify access token",
 )
-async def verify_token_endpoint(body: schemas.TokenRequestSchema, db: Session = Depends(get_session_local)):
+async def verify_token_endpoint(body: schemas.TokenRequestSchema):
     try:
-        payload = verify_token(body.token, db)
+        payload = verify_token(body.token)
         logger.log_message(f"""Returning from verify_token_endpoint: valid=True, user_id={
                            payload.get('sub')}""")
         return {"valid": True, "user_id": payload.get("sub")}
@@ -177,18 +190,8 @@ async def verify_token_with_admin_endpoint(
     body: schemas.TokenRequestSchema, db: Session = Depends(get_session_local)
 ):
     try:
-        # Проверяем токен и извлекаем полезную нагрузку
-        payload = verify_token(body.token, db)
-        user_id = payload.get("sub")
-
-        # Получаем пользователя из базы данных
-        user = db.query(User).filter(User.id == user_id).first()
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
-
-        # Логируем и возвращаем результат
-        is_superadmin = user.is_superadmin if hasattr(
-            user, "is_superadmin") else False
+        user, user_id = _get_current_user_from_access_token(body.token, db)
+        is_superadmin = bool(getattr(user, "is_superadmin", False))
         logger.log_message(
             f"""Returning from verify_token_with_admin_endpoint: valid=True,
                 user_id={user_id}, is_superadmin={is_superadmin}"""
@@ -212,11 +215,6 @@ async def check_superadmin(
     db: Session = Depends(get_session_local)
 ):
     token = credentials.credentials
-    token_data = verify_token(token, db=db)
-    user_id = token_data.get("sub")
-
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    user, _ = _get_current_user_from_access_token(token, db)
 
     return {"is_superadmin": user.is_superadmin}

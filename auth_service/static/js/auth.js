@@ -2,18 +2,56 @@
 let cachedAccessToken = null;
 let cachedUserId = null;
 let refreshTokenPromise = null;
+const TOKEN_EXPIRY_SKEW_MS = 30 * 1000;
 
 localStorage.removeItem("access_token");
 localStorage.removeItem("user_id");
 
-async function getTokenFromDatabase() {
-    if (cachedAccessToken) {
-        const tokenInfo = await verifyTokenOnServer(cachedAccessToken);
-        if (tokenInfo && tokenInfo.valid) {
-            cachedUserId = tokenInfo.user_id || cachedUserId;
-            return cachedAccessToken;
-        }
+function decodeJwtPayload(token) {
+    if (!token || typeof token !== "string") {
+        return null;
+    }
 
+    const parts = token.split(".");
+    if (parts.length !== 3) {
+        return null;
+    }
+
+    try {
+        const base64Url = parts[1];
+        const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
+        const padding = "=".repeat((4 - (base64.length % 4)) % 4);
+        const json = atob(base64 + padding);
+        return JSON.parse(json);
+    } catch (error) {
+        console.error("Failed to decode JWT payload:", error);
+        return null;
+    }
+}
+
+function isTokenExpired(token) {
+    const payload = decodeJwtPayload(token);
+    if (!payload || typeof payload.exp !== "number") {
+        return true;
+    }
+
+    return Date.now() >= (payload.exp * 1000) - TOKEN_EXPIRY_SKEW_MS;
+}
+
+function syncCachedUserIdFromToken(token) {
+    const payload = decodeJwtPayload(token);
+    if (payload && payload.sub) {
+        cachedUserId = payload.sub;
+    }
+}
+
+async function getTokenFromDatabase() {
+    if (cachedAccessToken && !isTokenExpired(cachedAccessToken)) {
+        syncCachedUserIdFromToken(cachedAccessToken);
+        return cachedAccessToken;
+    }
+
+    if (cachedAccessToken) {
         cachedAccessToken = null;
         cachedUserId = null;
     }
@@ -35,17 +73,6 @@ function getCurrentUserId() {
 
 function setCurrentUserId(userId) {
     cachedUserId = userId;
-}
-
-// Проверка токена на сервере перед выполнением других действий
-async function verifyTokenOnServer(token) {
-    const response = await fetch(`/verify-token`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token })
-    });
-
-    return await response.json();
 }
 
 

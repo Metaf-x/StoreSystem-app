@@ -70,6 +70,21 @@ async def websocket_endpoint(websocket: WebSocket, chat_id: str, user_id: str, d
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid UUID format")
 
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.close(code=1008)
+        return
+
+    try:
+        token_data = auth.verify_token(token)
+    except HTTPException:
+        await websocket.close(code=1008)
+        return
+
+    if token_data.get("sub") != str(user_uuid):
+        await websocket.close(code=1008)
+        return
+
     # Проверяем, есть ли пользователь в чате
     chat = crud.get_chat_by_id(db, chat_uuid)
     if not chat:

@@ -4,10 +4,13 @@ import sys
 import threading
 import uuid
 import unittest
+from datetime import datetime, timedelta
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import sessionmaker
+from fastapi import HTTPException
+from jose import jwt
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "auth_service"))
 
@@ -54,7 +57,7 @@ class CreateTokensUnitTest(unittest.TestCase):
         session = _GuardedSession()
 
         tokens = auth.create_tokens(
-            {"sub": "unit-test-user", "is_superadmin": False},
+            {"sub": "unit-test-user"},
             session,
         )
 
@@ -70,6 +73,41 @@ class CreateTokensUnitTest(unittest.TestCase):
         self.assertNotIn("DELETE", sql)
         self.assertTrue(tokens["access_token"])
         self.assertTrue(tokens["refresh_token"])
+
+
+class VerifyTokenUnitTest(unittest.TestCase):
+    def test_verify_token_decodes_access_token_without_db_lookup(self):
+        token = jwt.encode(
+            {
+                "sub": "unit-test-user",
+                "token_type": "access",
+                "exp": datetime.utcnow() + timedelta(minutes=5),
+            },
+            auth.SECRET_KEY,
+            algorithm=auth.ALGORITHM,
+        )
+
+        session = _GuardedSession()
+        payload = auth.verify_token(token, session)
+
+        self.assertEqual(payload["sub"], "unit-test-user")
+        self.assertEqual(payload["token_type"], "access")
+
+    def test_verify_token_rejects_refresh_token(self):
+        token = jwt.encode(
+            {
+                "sub": "unit-test-user",
+                "token_type": "refresh",
+                "exp": datetime.utcnow() + timedelta(minutes=5),
+            },
+            auth.SECRET_KEY,
+            algorithm=auth.ALGORITHM,
+        )
+
+        with self.assertRaises(HTTPException) as context:
+            auth.verify_token(token, _GuardedSession())
+
+        self.assertEqual(context.exception.status_code, 401)
 
 
 class CreateTokensConcurrencyTest(unittest.TestCase):
@@ -115,7 +153,7 @@ class CreateTokensConcurrencyTest(unittest.TestCase):
             wrapped_session = _AddBarrierSession(session, barrier)
             try:
                 tokens = auth.create_tokens(
-                    {"sub": self.user_id, "is_superadmin": False},
+                    {"sub": self.user_id},
                     wrapped_session,
                 )
                 with results_lock:

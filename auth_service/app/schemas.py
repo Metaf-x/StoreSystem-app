@@ -94,8 +94,8 @@ class Token(BaseModel):
 
 
 class TokenResponseSchema(BaseModel):
-    user_id: str
-    access_token: str
+    user_id: Optional[str] = None
+    access_token: Optional[str] = None
 
 
 class TokenRequestSchema(BaseModel):

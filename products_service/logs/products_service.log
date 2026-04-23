@@ -46,3 +46,9 @@
 {"name": "app.logger", "class": "INFO", "state": 20, "timestamp": 1776585619254, "message": "Getting all products", "ip_address": "192.168.107.10", "microservice": "products_service"}
 {"name": "app.logger", "class": "INFO", "state": 20, "timestamp": 1776590336192, "message": "Response from auth service: {'valid': True, 'user_id': 'cfb51e70-4298-4b24-9e09-bc1a6bc075cb'}", "ip_address": "192.168.107.10", "microservice": "products_service"}
 {"name": "app.logger", "class": "INFO", "state": 20, "timestamp": 1776590336192, "message": "Getting all products", "ip_address": "192.168.107.10", "microservice": "products_service"}
+{"name": "app.logger", "class": "INFO", "state": 20, "timestamp": 1776847260319, "message": "Kafka consumer started.", "ip_address": "192.168.107.12", "microservice": "products_service"}
+{"name": "app.logger", "class": "INFO", "state": 20, "timestamp": 1776847260319, "message": "Database initialized.", "ip_address": "192.168.107.12", "microservice": "products_service"}
+{"name": "app.logger", "class": "INFO", "state": 20, "timestamp": 1776847353922, "message": "Getting all products", "ip_address": "192.168.107.12", "microservice": "products_service"}
+{"name": "app.logger", "class": "INFO", "state": 20, "timestamp": 1776848068927, "message": "Getting all products", "ip_address": "192.168.107.12", "microservice": "products_service"}
+{"name": "app.logger", "class": "INFO", "state": 20, "timestamp": 1776848080269, "message": "Getting all products", "ip_address": "192.168.107.12", "microservice": "products_service"}
+{"name": "app.logger", "class": "INFO", "state": 20, "timestamp": 1776848120795, "message": "Getting all products", "ip_address": "192.168.107.12", "microservice": "products_service"}
