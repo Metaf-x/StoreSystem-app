@@ -16,8 +16,13 @@ def get_user_by_email(db: Session, email: str):
 
 def create_user(db: Session, user: UserCreate, is_superadmin: bool = False):
     hashed_password = get_password_hash(user.password)
-    db_user = User(id=uuid.uuid4(), email=user.email,
-                   name=user.name, hashed_password=hashed_password)
+    db_user = User(
+        id=uuid.uuid4(),
+        email=user.email,
+        name=user.name,
+        hashed_password=hashed_password,
+        is_superadmin=is_superadmin,
+    )
     try:
         # Синхронизируем PostgreSQL-роль до коммита, чтобы откатить все изменения
         # в одной транзакции, если что-то пойдет не так.
