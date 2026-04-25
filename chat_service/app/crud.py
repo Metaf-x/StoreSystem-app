@@ -23,10 +23,17 @@ def fetch_existing_user_ids(token: str) -> list[str]:
     try:
         response = requests.get(
             f"{AUTH_SERVICE_URL}/users/",
+            params={"page_size": 100},
             headers={"Authorization": f"Bearer {token}"}
         )
         response.raise_for_status()
-        users = response.json()
+        data = response.json()
+        users = data.get("users", data) if isinstance(data, dict) else data
+        if not isinstance(users, list):
+            raise HTTPException(
+                status_code=500,
+                detail="Unexpected auth service users response"
+            )
         return [user["id"] for user in users]
     except requests.RequestException as e:
         raise HTTPException(status_code=500, detail="Auth service unavailable")
@@ -128,7 +135,14 @@ def create_message(db: Session, chat_id: uuid.UUID, sender_id: uuid.UUID, conten
 
 def get_chat_messages(db: Session, chat_id: uuid.UUID, limit: int = 50):
     """Получает последние N сообщений в чате"""
-    return db.query(models.Message).filter(models.Message.chat_id == chat_id).order_by(models.Message.created_at.desc()).limit(limit).all()
+    messages = (
+        db.query(models.Message)
+        .filter(models.Message.chat_id == chat_id)
+        .order_by(models.Message.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return list(reversed(messages))
 
 
 def add_user_to_chat(db: Session, chat_id: uuid.UUID, user_id: uuid.UUID, token: str):

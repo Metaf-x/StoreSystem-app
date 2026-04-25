@@ -196,6 +196,7 @@ async def send_message(chat_id: str, message_data: schemas.MessageCreate, db: Se
     return schemas.MessageResponse(
         id=new_message.id,
         chat_id=new_message.chat_id,
+        sender_id=new_message.sender_id,
         content=new_message.content,
         created_at=new_message.created_at
     )

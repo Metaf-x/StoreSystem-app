@@ -114,6 +114,7 @@ async function openChat(chatId, chatName) {
     chatTitleEl.textContent = chatName || 'Без названия';
     chatMessagesEl.innerHTML = '';
     chatContainerEl.style.display = 'block';
+    sendBtn.disabled = true;
 
     // Если был старый WebSocket, отключаем все его колбэки, чтобы он не обнулил currentChatWebSocket
     if (currentChatWebSocket) {
@@ -129,23 +130,30 @@ async function openChat(chatId, chatName) {
     // Создаём новое соединение
     const wsUrl = `ws://${window.location.hostname}:8004/ws/${chatId}/${userId}?token=${encodeURIComponent(token)}`;
     console.log(`[WS] Подключаемся к: ${wsUrl}`);
-    currentChatWebSocket = new WebSocket(wsUrl);
+    const chatWebSocket = new WebSocket(wsUrl);
+    currentChatWebSocket = chatWebSocket;
 
-    currentChatWebSocket.onopen = () => {
+    chatWebSocket.onopen = () => {
+        if (currentChatWebSocket !== chatWebSocket) return;
         console.log(`[WS] onopen. Подключено к чату: ${chatId}`);
+        sendBtn.disabled = false;
     };
 
-    currentChatWebSocket.onerror = (event) => {
+    chatWebSocket.onerror = (event) => {
+        if (currentChatWebSocket !== chatWebSocket) return;
         console.log("[WS] onerror:", event);
     };
 
-    currentChatWebSocket.onclose = (event) => {
+    chatWebSocket.onclose = (event) => {
+        if (currentChatWebSocket !== chatWebSocket) return;
         console.log(`[WS] onclose. Код: ${event.code}, причина: ${event.reason}`);
         currentChatWebSocket = null;
+        sendBtn.disabled = true;
     };
 
     // Колбэк при получении сообщения
-    currentChatWebSocket.onmessage = (event) => {
+    chatWebSocket.onmessage = (event) => {
+        if (currentChatWebSocket !== chatWebSocket) return;
         console.log("[WS] onmessage с данными:", event.data);
         const messageObj = JSON.parse(event.data);
 
@@ -254,7 +262,7 @@ function sendMessage() {
     // Логируем состояние
     if (!currentChatWebSocket) {
         console.log("[WS] sendMessage: currentChatWebSocket = null");
-        alert('WebSocket не подключен');
+        alert('Выберите чат и дождитесь подключения');
         return;
     }
 
@@ -263,7 +271,7 @@ function sendMessage() {
 
     if (currentChatWebSocket.readyState !== WebSocket.OPEN) {
         console.log("[WS] Не OPEN, отправка невозможна.");
-        alert('WebSocket не подключен');
+        alert('Подключение к чату ещё не готово');
         return;
     }
 

@@ -76,12 +76,12 @@ async def websocket_endpoint(websocket: WebSocket, chat_id: str, user_id: str, d
         return
 
     try:
-        token_data = auth.verify_token(token)
+        token_data = auth.verify_token_in_other_service(token)
     except HTTPException:
         await websocket.close(code=1008)
         return
 
-    if token_data.get("sub") != str(user_uuid):
+    if token_data.get("user_id") != str(user_uuid):
         await websocket.close(code=1008)
         return
 

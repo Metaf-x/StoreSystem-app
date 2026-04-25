@@ -3,6 +3,19 @@
 let allUsers = [];       // список всех пользователей (id, name, email)
 let currentAdminId = null; // id текущего админа (берём из in-memory auth state)
 
+function normalizeUsersResponse(data) {
+    if (Array.isArray(data)) {
+        return data;
+    }
+
+    if (data && Array.isArray(data.users)) {
+        return data.users;
+    }
+
+    console.error("Неожиданный формат списка пользователей:", data);
+    return [];
+}
+
 /**
  * Инициализация после загрузки DOM
  */
@@ -40,7 +53,7 @@ document.addEventListener('DOMContentLoaded', async () => {
  */
 async function fetchAllUsers() {
     try {
-        const response = await fetch('/users', {
+        const response = await fetch('/users?page_size=100', {
             headers: {
                 'Authorization': 'Bearer ' + token
             }
@@ -49,9 +62,11 @@ async function fetchAllUsers() {
             console.error("Не удалось получить список пользователей", response.status);
             return;
         }
-        allUsers = await response.json(); // массив {id, name, email, role}
+        const data = await response.json();
+        allUsers = normalizeUsersResponse(data); // массив {id, name, email, role}
     } catch (err) {
         console.error("Ошибка fetchAllUsers:", err);
+        allUsers = [];
     }
 }
 
@@ -66,6 +81,14 @@ function openCreateChatModal() {
 
     const select = document.getElementById('participants-select');
     select.innerHTML = '';
+
+    if (!Array.isArray(allUsers) || allUsers.length === 0) {
+        const option = document.createElement('option');
+        option.disabled = true;
+        option.textContent = 'Пользователи не найдены';
+        select.appendChild(option);
+    }
+
     // Заполняем <option>
     allUsers.forEach(user => {
         // Если хотим исключить самого себя из выбора – расскоментить ниже
@@ -166,6 +189,13 @@ async function openAddParticipantsModal(chatId) {
 
     const select = document.getElementById('add-participants-select');
     select.innerHTML = '';
+
+    if (!Array.isArray(allUsers) || allUsers.length === 0) {
+        const option = document.createElement('option');
+        option.disabled = true;
+        option.textContent = 'Пользователи не найдены';
+        select.appendChild(option);
+    }
 
     // Заполняем списком всех пользователей (или фильтруем участников?)
     allUsers.forEach(user => {

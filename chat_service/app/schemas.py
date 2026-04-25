@@ -29,6 +29,7 @@ class ChatResponse(ChatBase):
 
     class Config:
         from_attributes = True
+        orm_mode = True
 
 
 # ----------------- УЧАСТНИКИ ЧАТА -----------------
@@ -40,6 +41,7 @@ class ChatParticipantBase(BaseModel):
 
     class Config:
         from_attributes = True
+        orm_mode = True
 
 
 # ----------------- СООБЩЕНИЯ -----------------
@@ -61,7 +63,9 @@ class MessageCreate(MessageBase):
 
 class MessageResponse(MessageBase):
     id: UUID
+    sender_id: UUID
     created_at: datetime
 
     class Config:
         from_attributes = True
+        orm_mode = True
