@@ -225,6 +225,9 @@ def update_user_role(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    if user.role == form_data.role:
+        return {"detail": "User already has this role", "role": user.role}
+
     if user.role == "admin" and form_data.role != "admin" and crud.count_users_by_role(db, "admin") <= 1:
         raise HTTPException(
             status_code=403, detail="Cannot remove the last admin role")

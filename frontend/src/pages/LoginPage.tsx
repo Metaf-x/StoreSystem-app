@@ -93,7 +93,11 @@ export function LoginPage() {
             {submitting ? "Вход..." : "Войти"}
           </button>
         </form>
-        {error && <div className="mt-3 text-center text-danger">{error}</div>}
+        {error && (
+          <div className="mt-3 text-center text-danger" data-testid="login-error">
+            {error}
+          </div>
+        )}
         <div className="text-center mt-3">
           <p>
             Нет аккаунта? <Link to="/register">Зарегистрируйтесь</Link>
