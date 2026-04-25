@@ -1,168 +1,218 @@
 # Авторизация и сессия
 
-Ниже описано, как сейчас работает авторизация в `auth_service` и как приложение восстанавливает состояние пользователя после обновления страницы.
+Документ описывает текущую схему входа пользователя, хранения токенов и восстановления UI-сессии после обновления страницы.
 
 ## Ключевая идея
 
-Система не использует классическую серверную сессию в cookie. Вместо этого она работает по схеме `access token + refresh token`:
+Приложение не использует классическую серверную session-cookie авторизацию. Используется схема:
 
-- `access_token` нужен для обычных запросов к защищенным API.
+```text
+короткий access JWT + долгий refresh JWT в HttpOnly cookie
+```
+
+- `access_token` нужен для защищенных API-запросов.
 - `refresh_token` нужен только для получения нового `access_token`.
-- `refresh_token` хранится в `HttpOnly` cookie, поэтому JavaScript его не видит.
-- Текущий `user_id` хранится только в памяти страницы и восстанавливается из ответа сервера.
+- `refresh_token` не возвращается в JSON и не доступен JavaScript.
+- Роли не кладутся в access token; актуальная роль берется из `auth_service`.
+- `localStorage` не является источником auth-state.
 
-Источники:
+Основные файлы:
 
-- [auth_service/app/routes.py](/Users/metaf/Dev/git/StoreSystem-app/auth_service/app/routes.py)
 - [auth_service/app/auth.py](/Users/metaf/Dev/git/StoreSystem-app/auth_service/app/auth.py)
+- [auth_service/app/routes.py](/Users/metaf/Dev/git/StoreSystem-app/auth_service/app/routes.py)
+- [auth_service/main.py](/Users/metaf/Dev/git/StoreSystem-app/auth_service/main.py)
 - [auth_service/static/js/auth.js](/Users/metaf/Dev/git/StoreSystem-app/auth_service/static/js/auth.js)
 - [auth_service/static/js/form_login.js](/Users/metaf/Dev/git/StoreSystem-app/auth_service/static/js/form_login.js)
 
-## Что где хранится
+## Что хранится на клиенте
 
-- `access_token`:
-  - живет 30 минут;
-  - выдается сервером после логина и после refresh;
-  - кэшируется во фронтенде только в памяти страницы (`cachedAccessToken`);
-  - не сохраняется в `localStorage`.
-- `refresh_token`:
-  - живет до 7 дней;
-  - хранится в таблице `Token` в БД;
-  - также ставится в `HttpOnly` cookie;
-  - при `remember me = false` cookie становится сессионной;
-  - при `remember me = true` cookie получает `max_age` на 7 дней.
-- `user_id`:
-  - приходит из JWT payload (`sub`);
-  - на фронте хранится только в памяти страницы (`cachedUserId`);
-  - больше не используется как постоянное состояние в `localStorage`.
+`access_token`:
 
-## Как проходит логин
+- хранится только в памяти текущей страницы в `cachedAccessToken`;
+- теряется при reload, закрытии вкладки или новом документе;
+- не пишется в `localStorage`;
+- используется в заголовке `Authorization: Bearer <access_token>`.
 
-1. Пользователь вводит `email`, `password` и, при необходимости, ставит `remember me`.
-2. Фронт отправляет `POST /login` с телом:
-   - `email`
-   - `password`
-   - `remember_me`
-3. Сервер:
-   - ищет пользователя по `email`;
-   - проверяет пароль;
-   - создает пару токенов через `create_tokens(...)`;
-   - удаляет старые токены этого пользователя из БД;
-   - возвращает `access_token` и `user_id` в JSON;
-   - ставит `refresh_token` в cookie.
-4. Фронт после успешного ответа перенаправляет пользователя на `/products`.
+`refresh_token`:
 
-См.:
+- хранится в cookie `refresh_token`;
+- ставится сервером через `Set-Cookie`;
+- имеет флаги `HttpOnly`, `SameSite=Lax`, `Path=/`;
+- в локальной разработке ставится с `Secure=false`;
+- не читается из JavaScript.
 
-- [auth_service/app/routes.py](/Users/metaf/Dev/git/StoreSystem-app/auth_service/app/routes.py#L129)
-- [auth_service/app/auth.py](/Users/metaf/Dev/git/StoreSystem-app/auth_service/app/auth.py#L18)
-- [auth_service/app/schemas.py](/Users/metaf/Dev/git/StoreSystem-app/auth_service/app/schemas.py#L67)
+`user_id`:
 
-## Как восстанавливается доступ после reload
+- находится в JWT claim `sub`;
+- хранится на странице в `cachedUserId`;
+- возвращается из `/refresh-token`;
+- не хранится в `localStorage`.
 
-После обновления страницы JavaScript уже не может опираться на старый `access_token`, потому что он не лежит в `localStorage`.
+Роль:
 
-### Порядок восстановления
+- хранится в таблице `users.role`;
+- запрашивается через `/me` или `/verify-token`;
+- обновляется для UI через polling в `check_superadmin.js`.
 
-1. Страница вызывает `getTokenFromDatabase()`.
-2. Если в памяти уже есть `cachedAccessToken`, фронт проверяет его через `POST /verify-token`.
-3. Если токен невалиден или его нет, фронт вызывает `POST /refresh-token` с `credentials: "include"`.
-4. Сервер читает `refresh_token` из cookie.
-5. Сервер проверяет:
-   - JWT refresh token;
-   - запись в таблице `Token`;
-   - срок действия refresh token.
-6. Если refresh валиден, сервер выдает новый `access_token` и `user_id`.
-7. Фронт кладет их только в память страницы:
-   - `cachedAccessToken`
-   - `cachedUserId`
-8. Если refresh не удался, пользователь перенаправляется на `/login`.
+## Login flow
 
-См.:
+1. Пользователь вводит `email`, `password`, `remember_me`.
+2. Frontend отправляет:
 
-- [auth_service/static/js/auth.js](/Users/metaf/Dev/git/StoreSystem-app/auth_service/static/js/auth.js#L9)
-- [auth_service/app/routes.py](/Users/metaf/Dev/git/StoreSystem-app/auth_service/app/routes.py#L43)
-- [auth_service/app/auth.py](/Users/metaf/Dev/git/StoreSystem-app/auth_service/app/auth.py#L80)
+```http
+POST /login
+Content-Type: application/json
 
-## Как работают защищенные запросы
+{
+  "email": "user@example.com",
+  "password": "password",
+  "remember_me": true
+}
+```
 
-Почти все страницы и сценарии перед обращением к API сначала вызывают `getTokenFromDatabase()`.
+3. `auth_service` проверяет email и пароль.
+4. Сервер создает два JWT:
+   - `access_token` с `token_type=access`;
+   - `refresh_token` с `token_type=refresh`.
+5. В JSON-ответ возвращается только `access_token`:
 
-После этого запросы уходят с заголовком:
+```json
+{
+  "user_id": "uuid",
+  "message": "User successfully logged in",
+  "access_token": "jwt",
+  "token_type": "bearer"
+}
+```
+
+6. `refresh_token` приходит отдельно в HTTP header:
+
+```http
+Set-Cookie: refresh_token=<jwt>; HttpOnly; SameSite=Lax; Path=/
+```
+
+7. Frontend перенаправляет пользователя на `/products`.
+
+Важно: `refresh_token` не находится в body ответа. API- и UI-тесты должны читать его из cookies ответа.
+
+## Восстановление после reload
+
+После reload access token в памяти страницы исчезает.
+
+Порядок восстановления:
+
+1. Скрипт страницы вызывает `getTokenFromDatabase()`.
+2. Если `cachedAccessToken` есть и не истек, он используется сразу.
+3. Если access token отсутствует или истек, frontend вызывает:
+
+```http
+POST /refresh-token
+Cookie: refresh_token=<jwt>
+```
+
+4. Сервер проверяет:
+   - подпись и `exp` refresh JWT;
+   - `token_type=refresh`;
+   - наличие refresh token в таблице `tokens`;
+   - `refresh_expires_at`.
+5. Если refresh валиден, сервер возвращает новый access token:
+
+```json
+{
+  "user_id": "uuid",
+  "access_token": "new-access-jwt"
+}
+```
+
+6. Frontend кладет новый access token только в память страницы.
+
+Если cookie отсутствует или невалидна, `/refresh-token` возвращает `200` с пустыми полями:
+
+```json
+{
+  "user_id": null,
+  "access_token": null
+}
+```
+
+После этого UI остается на login page или перенаправляет пользователя на `/login`.
+
+## Защищенные API-запросы
+
+Все защищенные запросы отправляют access token:
 
 ```http
 Authorization: Bearer <access_token>
 ```
 
-Сервер проверяет токен через `verify_token(...)`:
+Проверка access token состоит из двух уровней.
 
-- JWT должен корректно декодироваться;
-- `sub` должен соответствовать пользователю;
-- токен должен быть найден в таблице `Token`;
-- access token не должен быть истекшим.
+Локальная JWT-проверка:
 
-Для UI и внутренних проверок сервер также возвращает `user_id`:
+- подпись `HS256`;
+- claim `exp`;
+- claim `sub`;
+- `token_type=access`;
+- старые access tokens без `token_type` временно принимаются для совместимости.
 
-- `POST /verify-token` -> `{ valid: true, user_id: ... }`
-- `POST /verify-token-with-admin` -> `{ valid: true, user_id: ..., is_superadmin: ... }`
+Проверка актуального пользователя и роли:
 
-См.:
+- `/verify-token` декодирует access token;
+- ищет пользователя в БД;
+- возвращает свежую роль из `users.role`.
 
-- [auth_service/main.py](/Users/metaf/Dev/git/StoreSystem-app/auth_service/main.py#L154)
-- [auth_service/main.py](/Users/metaf/Dev/git/StoreSystem-app/auth_service/main.py#L170)
+Ресурсные сервисы (`products_service`, `orders_service`, `chat_service`) сначала декодируют JWT локально, затем вызывают `/verify-token`, когда им нужны актуальные `user_id` и `role`.
 
-## Как работает remember me
+## Роли
 
-`remember me` влияет только на срок жизни refresh cookie:
+Поддерживаются роли:
 
-- включен -> cookie живет 7 дней;
-- выключен -> cookie живет до закрытия браузера.
+```text
+customer < operator < admin
+```
 
-Сам refresh token при этом все равно проверяется сервером по БД. То есть одной только cookie недостаточно, чтобы поддерживать вход.
+Access token не содержит role claim. Это сделано намеренно: если роль пользователя изменилась, новый статус должен применяться сразу на следующем запросе к `/me` или `/verify-token`, а не после истечения access token.
 
-См.:
+UI получает роль через `/me` и обновляет видимость элементов через `check_superadmin.js`.
 
-- [auth_service/app/routes.py](/Users/metaf/Dev/git/StoreSystem-app/auth_service/app/routes.py#L149)
+## Logout
 
-## Как работает logout
+1. Frontend вызывает:
 
-1. Фронт вызывает `POST /logout`.
-2. Сервер читает `refresh_token` из cookie.
-3. Если cookie есть, сервер удаляет соответствующую запись из таблицы `Token`.
-4. Сервер удаляет cookie `refresh_token`.
-5. Фронт очищает локальное состояние и переходит на `/login`.
+```http
+POST /logout
+Cookie: refresh_token=<jwt>
+```
 
-Это означает, что logout отзывает именно refresh token. После этого обновить access token больше нельзя.
+2. Сервер удаляет запись refresh token из таблицы `tokens`.
+3. Сервер удаляет cookie `refresh_token`.
+4. Frontend очищает `cachedAccessToken`, `cachedUserId` и редиректит на `/login`.
 
-См.:
+Logout отзывает refresh token. Уже выданный access token остается валидным до `exp`, потому что access JWT проверяется stateless.
 
-- [auth_service/app/routes.py](/Users/metaf/Dev/git/StoreSystem-app/auth_service/app/routes.py#L54)
-- [auth_service/app/auth.py](/Users/metaf/Dev/git/StoreSystem-app/auth_service/app/auth.py#L119)
-- [auth_service/static/js/auth.js](/Users/metaf/Dev/git/StoreSystem-app/auth_service/static/js/auth.js#L83)
+## Single-session behavior
 
-## Где хранится текущий пользователь
+В таблице `tokens` первичный ключ - `user_id`. Поэтому у пользователя сейчас одна refresh-сессия.
 
-Раньше `user_id` сохранялся в `localStorage`. Сейчас это убрано.
+Новый login тем же пользователем:
 
-Сейчас текущий пользователь хранится только так:
+- перезаписывает строку в `tokens`;
+- делает старый refresh token недействительным;
+- не отзывает уже выданный access token мгновенно.
 
-- в JWT payload как `sub`;
-- в `cachedUserId` на текущей странице;
-- в ответе `refresh-token` / `verify-token`.
+## Прогретая UI-сессия для автотестов
 
-Это важно для страниц, которые должны понимать, кто вошел:
+Чтобы открыть браузер уже авторизованным:
 
-- чат;
-- админка чатов;
-- страницы, где нужно показать роль или спрятать кнопки;
-- любые места, где нужен текущий `user_id`.
+1. Выполнить API login.
+2. Взять `refresh_token` из response cookies, а не из response body.
+3. Положить cookie `refresh_token` в браузер на тот же origin, где открыт UI.
+4. Открыть `/login` или защищенную страницу.
+5. UI сам вызовет `/refresh-token` и получит access token.
 
-См.:
+В браузер не нужно класть `access_token` или `user_id`.
 
-- [auth_service/static/js/chat.js](/Users/metaf/Dev/git/StoreSystem-app/auth_service/static/js/chat.js#L20)
-- [auth_service/static/js/chat_admin.js](/Users/metaf/Dev/git/StoreSystem-app/auth_service/static/js/chat_admin.js#L9)
-
-## Пример потока
+## Диаграмма
 
 ```mermaid
 sequenceDiagram
@@ -170,31 +220,31 @@ sequenceDiagram
     participant F as Frontend
     participant A as auth_service
     participant D as Database
+    participant S as Resource service
 
     U->>F: Вводит email/password
     F->>A: POST /login
-    A->>D: Проверка пользователя и создание token row
-    A-->>F: access_token + user_id
-    A-->>F: Set-Cookie(refresh_token, HttpOnly)
-    F->>F: Переход на /products
+    A->>D: Проверка пользователя, upsert refresh session
+    A-->>F: JSON access_token + user_id
+    A-->>F: Set-Cookie refresh_token HttpOnly
+    F->>F: Redirect /products
 
-    F->>A: POST /refresh-token (cookie автоматически)
-    A->>D: Проверка refresh token в БД
+    F->>A: POST /refresh-token с cookie
+    A->>D: Проверка refresh token row
     A-->>F: Новый access_token + user_id
 
+    F->>S: API request Authorization Bearer access_token
+    S->>S: Локальная JWT-проверка
+    S->>A: POST /verify-token
+    A->>D: Получение актуальной роли
+    A-->>S: valid, user_id, role
+
     F->>A: POST /logout
-    A->>D: Удаление refresh token row
-    A-->>F: Delete-Cookie(refresh_token)
+    A->>D: Delete refresh token row
+    A-->>F: Delete-Cookie refresh_token
 ```
 
-## Практические выводы
+## Связанные документы
 
-- `access_token` не переживает refresh страницы сам по себе.
-- Восстановление входа идет через `HttpOnly refresh_token`.
-- `localStorage` больше не является источником правды для auth-state.
-- `logout` реально отзывает refresh token, а не только чистит UI.
-- `user_id` для интерфейса берется из ответа сервера, а не из браузерного хранилища.
-
-## Важное замечание
-
-В текущей реализации `refresh_token` ставится с `secure: False` в [auth_service/app/routes.py](/Users/metaf/Dev/git/StoreSystem-app/auth_service/app/routes.py#L149). Это подходит для локальной разработки по HTTP, но для production по HTTPS нужно включить `secure: True`.
+- [Технические требования: авторизация и JWT-сессия](/Users/metaf/Dev/git/StoreSystem-app/docs/authentication-requirements.md)
+- [Техническая документация: авторизация и JWT-сессия](/Users/metaf/Dev/git/StoreSystem-app/docs/authentication-technical-docs.md)
