@@ -1,3 +1,5 @@
+let isSupplierAdmin = false;
+
 document.addEventListener("DOMContentLoaded", async function () {
     const token = await getTokenFromDatabase();
 
@@ -7,6 +9,10 @@ document.addEventListener("DOMContentLoaded", async function () {
         return;
     }
 
+    if (typeof fetchRoleStatus === "function") {
+        await fetchRoleStatus();
+    }
+    isSupplierAdmin = await checkAdmin(token);
     initializeSuppliers();
 
     // Открытие модального окна создания нового поставщика
@@ -193,6 +199,11 @@ document.addEventListener("DOMContentLoaded", async function () {
         }
     });
 
+    document.getElementById("supplier-document-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        await uploadSupplierDocument();
+    });
+
     // Добавляем обработчик для кнопок "Редактировать" и "Удалить" в таблице
     document.getElementById("suppliers-table").addEventListener("click", (event) => {
         const target = event.target;
@@ -203,9 +214,42 @@ document.addEventListener("DOMContentLoaded", async function () {
         } else if (target.classList.contains("btn-outline-danger")) {
             const confirmed = confirm("Вы уверены, что хотите удалить поставщика?");
             if (confirmed) deleteSupplier(supplierId);
+        } else if (target.classList.contains("btn-outline-info")) {
+            openDocumentsModal(supplierId);
+        }
+    });
+
+    document.getElementById("supplier-documents-list").addEventListener("click", async (event) => {
+        const target = event.target;
+        const supplierId = document.getElementById("documents-supplier-id").value;
+        const documentId = target.dataset.documentId;
+        if (!documentId) return;
+
+        if (target.classList.contains("btn-download-document")) {
+            await downloadSupplierDocument(supplierId, documentId, target.dataset.filename);
+        } else if (target.classList.contains("btn-delete-document")) {
+            await deleteSupplierDocument(supplierId, documentId);
         }
     });
 });
+
+async function checkAdmin(token) {
+    try {
+        const response = await fetch("/me", {
+            method: "GET",
+            headers: {
+                "Authorization": `Bearer ${token}`,
+                "Content-Type": "application/json"
+            }
+        });
+        if (!response.ok) return false;
+        const data = await response.json();
+        return data.role === "operator" || data.role === "admin";
+    } catch (error) {
+        console.error("Ошибка проверки роли пользователя:", error);
+        return false;
+    }
+}
 
 function showNotification(message, type = "success", duration = 3000) {
     const notification = document.getElementById("notification");
@@ -408,10 +452,164 @@ async function deleteSupplier(supplierId) {
     }
 }
 
+async function openDocumentsModal(supplierId) {
+    document.getElementById("documents-supplier-id").value = supplierId;
+    document.getElementById("supplier-document-form").style.display = isSupplierAdmin ? "block" : "none";
+    document.getElementById("supplier-document-form").reset();
+    await loadSupplierDocuments(supplierId);
+    $("#supplierDocumentsModal").modal("show");
+}
+
+async function loadSupplierDocuments(supplierId) {
+    const token = await getTokenFromDatabase();
+    const list = document.getElementById("supplier-documents-list");
+    list.innerHTML = "<div class=\"text-muted\">Загрузка документов...</div>";
+
+    const response = await fetch(`http://${window.location.hostname}:8002/suppliers/${supplierId}/documents`, {
+        headers: { "Authorization": `Bearer ${token}` }
+    });
+
+    if (!response.ok) {
+        list.innerHTML = "<div class=\"alert alert-danger\">Ошибка загрузки документов</div>";
+        return;
+    }
+
+    const documents = await response.json();
+    renderSupplierDocuments(documents, supplierId);
+}
+
+function getDocumentTypeLabel(documentType) {
+    const labels = {
+        contract: "Договор",
+        certificate: "Сертификат",
+        requisites: "Реквизиты",
+        price_list: "Прайс-лист",
+        other: "Другое"
+    };
+    return labels[documentType] || documentType;
+}
+
+function escapeHtml(value) {
+    return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
+
+function renderSupplierDocuments(documents, supplierId) {
+    const list = document.getElementById("supplier-documents-list");
+    if (documents.length === 0) {
+        list.innerHTML = "<div class=\"alert alert-info\">Документы не загружены</div>";
+        return;
+    }
+
+    list.innerHTML = `
+        <table class="table table-sm align-middle">
+            <thead>
+                <tr>
+                    <th>Тип</th>
+                    <th>Файл</th>
+                    <th>Размер</th>
+                    <th>Дата</th>
+                    <th class="text-end">Действия</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${documents.map(documentItem => `
+                    <tr>
+                        <td>${escapeHtml(getDocumentTypeLabel(documentItem.document_type))}</td>
+                        <td>${escapeHtml(documentItem.original_filename)}</td>
+                        <td>${Math.ceil(documentItem.file_size / 1024)} КБ</td>
+                        <td>${new Date(documentItem.created_at).toLocaleString()}</td>
+                        <td class="text-end">
+                            <button class="btn btn-sm btn-outline-primary btn-download-document" data-document-id="${documentItem.document_id}" data-filename="${escapeHtml(documentItem.original_filename)}">Скачать</button>
+                            ${isSupplierAdmin ? `<button class="btn btn-sm btn-outline-danger ms-1 btn-delete-document" data-document-id="${documentItem.document_id}">Удалить</button>` : ""}
+                        </td>
+                    </tr>
+                `).join("")}
+            </tbody>
+        </table>
+    `;
+}
+
+async function uploadSupplierDocument() {
+    const token = await getTokenFromDatabase();
+    const supplierId = document.getElementById("documents-supplier-id").value;
+    const fileInput = document.getElementById("document-file");
+    const file = fileInput.files[0];
+    if (!file) {
+        showNotification("Выберите файл документа", "danger");
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("document_type", document.getElementById("document-type").value);
+    formData.append("description", document.getElementById("document-description").value.trim());
+
+    const response = await fetch(`http://${window.location.hostname}:8002/suppliers/${supplierId}/documents`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${token}` },
+        body: formData
+    });
+
+    if (!response.ok) {
+        const error = await response.json();
+        showNotification(error.detail || "Ошибка загрузки документа", "danger", 5000);
+        return;
+    }
+
+    document.getElementById("supplier-document-form").reset();
+    showNotification("Документ загружен");
+    await loadSupplierDocuments(supplierId);
+}
+
+async function downloadSupplierDocument(supplierId, documentId, filename) {
+    const token = await getTokenFromDatabase();
+    const response = await fetch(`http://${window.location.hostname}:8002/suppliers/${supplierId}/documents/${documentId}/download`, {
+        headers: { "Authorization": `Bearer ${token}` }
+    });
+    if (!response.ok) {
+        showNotification("Ошибка скачивания документа", "danger");
+        return;
+    }
+    downloadBlob(await response.blob(), filename);
+}
+
+async function deleteSupplierDocument(supplierId, documentId) {
+    if (!confirm("Удалить документ поставщика?")) return;
+    const token = await getTokenFromDatabase();
+    const response = await fetch(`http://${window.location.hostname}:8002/suppliers/${supplierId}/documents/${documentId}`, {
+        method: "DELETE",
+        headers: { "Authorization": `Bearer ${token}` }
+    });
+    if (!response.ok) {
+        const error = await response.json();
+        showNotification(error.detail || "Ошибка удаления документа", "danger");
+        return;
+    }
+    showNotification("Документ удалён");
+    await loadSupplierDocuments(supplierId);
+}
+
+function downloadBlob(blob, filename) {
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+}
+
 //Заполнение таблицы поставщиков
 function renderSuppliersTable(suppliers) {
     const tableBody = document.querySelector("#suppliers-table tbody");
     tableBody.innerHTML = "";
+    const canWrite = window.isOperator === true;
 
     suppliers.forEach((supplier) => {
         const row = document.createElement("tr");
@@ -425,8 +623,9 @@ function renderSuppliersTable(suppliers) {
             <td>${supplier.city}</td>
             <td>${supplier.website}</td>
             <td class="text-center">
-                <button class="btn btn-sm btn-outline-warning mt-2" data-id="${supplier.supplier_id}">Редактировать</button>
-                <button class="btn btn-sm btn-outline-danger mt-2" data-id="${supplier.supplier_id}">Удалить</button>
+                <button class="btn btn-sm btn-outline-info mt-2" data-id="${supplier.supplier_id}">Документы</button>
+                ${canWrite ? `<button class="btn btn-sm btn-outline-warning mt-2" data-id="${supplier.supplier_id}">Редактировать</button>
+                <button class="btn btn-sm btn-outline-danger mt-2" data-id="${supplier.supplier_id}">Удалить</button>` : ""}
             </td>
         `;
         tableBody.appendChild(row);

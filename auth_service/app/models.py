@@ -15,7 +15,8 @@ class User(Base):
     name = Column(String, index=True)
     email = Column(String, unique=True, index=True)
     hashed_password = Column(String)
-    is_superadmin = Column(Boolean, default=False)  # Поле для супер админа
+    role = Column(String, default="customer", nullable=False, index=True)
+    is_superadmin = Column(Boolean, default=False)  # Legacy migration source.
 
 
 class Token(Base):

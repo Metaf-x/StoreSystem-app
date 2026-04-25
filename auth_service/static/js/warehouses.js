@@ -6,6 +6,9 @@ document.addEventListener("DOMContentLoaded", async function () {
         window.location.href = '/login';
         return;
     }
+    if (typeof fetchRoleStatus === "function") {
+        await fetchRoleStatus();
+    }
 
     initializeWarehouses();
 
@@ -377,6 +380,7 @@ async function deleteWarehouse(warehouseId) {
 function renderWarehousesTable(warehouses) {
     const tableBody = document.querySelector("#warehouses-table tbody");
     tableBody.innerHTML = "";
+    const canWrite = window.isOperator === true;
 
     warehouses.forEach((warehouse) => {
         const row = document.createElement("tr");
@@ -389,8 +393,8 @@ function renderWarehousesTable(warehouses) {
             <td>${warehouse.area_size + " кв.м" || ""}</td>
             <td class="text-center">
                 <button class="btn btn-sm btn-outline-info" data-id="${warehouse.warehouse_id}">Посмотреть</button>
-                <button class="btn btn-sm btn-outline-warning" data-id="${warehouse.warehouse_id}">Редактировать</button>
-                <button class="btn btn-sm btn-outline-danger" data-id="${warehouse.warehouse_id}">Удалить</button>
+                ${canWrite ? `<button class="btn btn-sm btn-outline-warning" data-id="${warehouse.warehouse_id}">Редактировать</button>
+                <button class="btn btn-sm btn-outline-danger" data-id="${warehouse.warehouse_id}">Удалить</button>` : ""}
             </td>
         `;
         tableBody.appendChild(row);

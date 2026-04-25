@@ -2,12 +2,12 @@ function renderAccessDenied() {
     document.body.innerHTML = "<h2>Доступ запрещён</h2>";
 }
 
-document.addEventListener("superadmin-status-changed", (event) => {
-    if (!event.detail || typeof event.detail.isSuperAdmin !== "boolean") {
+document.addEventListener("role-status-changed", (event) => {
+    if (!event.detail || typeof event.detail.isOperator !== "boolean") {
         return;
     }
 
-    if (!event.detail.isSuperAdmin) {
+    if (!event.detail.isOperator) {
         renderAccessDenied();
         return;
     }
@@ -28,8 +28,8 @@ document.addEventListener("DOMContentLoaded", async function () {
         return;
     }
 
-    const isAdmin = await checkAdmin(token);
-    if (!isAdmin) {
+    const isOperator = await checkOperator(token);
+    if (!isOperator) {
         renderAccessDenied();
         return;
     }
@@ -42,9 +42,9 @@ document.addEventListener("DOMContentLoaded", async function () {
         loadOrders();
     });
 
-    async function checkAdmin(token) {
+    async function checkOperator(token) {
         try {
-            const response = await fetch("/check-superadmin", {
+            const response = await fetch("/me", {
                 method: "GET",
                 headers: {
                     "Authorization": `Bearer ${token}`,
@@ -57,9 +57,9 @@ document.addEventListener("DOMContentLoaded", async function () {
             }
 
             const data = await response.json();
-            return data.is_superadmin;
+            return data.role === "operator" || data.role === "admin";
         } catch (error) {
-            console.error("Ошибка проверки статуса администратора:", error);
+            console.error("Ошибка проверки роли пользователя:", error);
             return false;
         }
     }
@@ -133,6 +133,8 @@ document.addEventListener("DOMContentLoaded", async function () {
                             <option value="completed" ${order.status === "completed" ? "selected" : ""}>Завершён</option>
                             <option value="cancelled" ${order.status === "cancelled" ? "selected" : ""}>Отменён</option>
                         </select>
+                        <button class="btn btn-outline-primary btn-sm me-2" onclick="downloadOrderDocument('${order.orderId}', 'invoice')">Скачать счёт</button>
+                        <button class="btn btn-outline-primary btn-sm me-2" onclick="downloadOrderDocument('${order.orderId}', 'shipment')">Скачать отгрузочный документ</button>
                         <button class="btn btn-primary btn-sm" onclick="updateOrderStatus('${order.orderId}')">Обновить статус</button>
                     </div>
                 </div>
@@ -175,5 +177,28 @@ document.addEventListener("DOMContentLoaded", async function () {
             console.error("Ошибка изменения статуса:", error);
             alert("Ошибка при изменении статуса заказа.");
         }
+    };
+
+    window.downloadOrderDocument = async function (orderId, documentKind) {
+        const token = await getTokenFromDatabase();
+        const filename = `${documentKind}-${orderId}.pdf`;
+        const response = await fetch(`http://${window.location.hostname}:8003/orders/${orderId}/documents/${documentKind}.pdf`, {
+            headers: { "Authorization": `Bearer ${token}` }
+        });
+
+        if (!response.ok) {
+            alert("Ошибка при скачивании документа.");
+            return;
+        }
+
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.URL.revokeObjectURL(url);
     };
 });

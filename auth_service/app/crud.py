@@ -6,7 +6,7 @@ from app.auth import get_password_hash
 import uuid
 from app import logger, schemas
 from psycopg2 import sql
-from sqlalchemy import case, or_
+from sqlalchemy import or_
 from typing import Optional
 
 
@@ -14,14 +14,27 @@ def get_user_by_email(db: Session, email: str):
     return db.query(User).filter(User.email == email.lower()).first()
 
 
-def create_user(db: Session, user: UserCreate, is_superadmin: bool = False):
+VALID_ROLES = {"customer", "operator", "admin"}
+
+
+def normalize_role(role: str) -> str:
+    if role not in VALID_ROLES:
+        raise ValueError(f"Unsupported role: {role}")
+    return role
+
+
+def create_user(db: Session, user: UserCreate, role: str = "customer", is_superadmin: bool = False):
+    if is_superadmin:
+        role = "admin"
+    role = normalize_role(role)
     hashed_password = get_password_hash(user.password)
     db_user = User(
         id=uuid.uuid4(),
         email=user.email,
         name=user.name,
         hashed_password=hashed_password,
-        is_superadmin=is_superadmin,
+        role=role,
+        is_superadmin=role == "admin",
     )
     try:
         # Синхронизируем PostgreSQL-роль до коммита, чтобы откатить все изменения
@@ -86,16 +99,25 @@ def drop_role_for_user(db: Session, email: str):
 
 
 def promote_to_superadmin(db: Session, user_id: uuid.UUID):
+    return update_user_role(db, user_id, "admin")
+
+
+def update_user_role(db: Session, user_id: uuid.UUID, role: str):
+    role = normalize_role(role)
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         return None
 
-    user.is_superadmin = True
+    user.role = role
+    user.is_superadmin = role == "admin"
     db.commit()
     db.refresh(user)
-    logger.log_message(
-        f"A user {user.email} promoted to super admin in the database")
+    logger.log_message(f"A user {user.email} role changed to {role}")
     return user
+
+
+def count_users_by_role(db: Session, role: str):
+    return db.query(User).filter(User.role == normalize_role(role)).count()
 
 
 def get_users_for_superadmin(
@@ -109,10 +131,8 @@ def get_users_for_superadmin(
 ):
     query = db.query(User)
 
-    if role == "superadmin":
-        query = query.filter(User.is_superadmin.is_(True))
-    elif role == "user":
-        query = query.filter(User.is_superadmin.is_(False))
+    if role in VALID_ROLES:
+        query = query.filter(User.role == role)
 
     if search:
         search_value = f"%{search.strip()}%"
@@ -129,7 +149,7 @@ def get_users_for_superadmin(
         "id": User.id,
         "name": User.name,
         "email": User.email,
-        "role": case((User.is_superadmin.is_(True), 1), else_=0),
+        "role": User.role,
     }
 
     sort_column = sort_map.get(sort_by, User.name)

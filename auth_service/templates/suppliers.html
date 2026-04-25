@@ -11,7 +11,7 @@
 
 <!-- Кнопка для открытия модального окна добавления поставщика -->
 <div class="text-end mb-3">
-    <button id="add-new-supplier-btn" class="btn btn-primary mb-3" data-bs-toggle="modal" data-bs-target="#addSupplierModal">
+    <button id="add-new-supplier-btn" class="btn btn-primary mb-3" data-role-min="operator" data-bs-toggle="modal" data-bs-target="#addSupplierModal">
         Добавить нового поставщика
     </button>
 </div>
@@ -164,6 +164,45 @@
                     </div>
                     <button type="submit" class="btn btn-primary">Сохранить изменения</button>
                 </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Модальное окно документов поставщика -->
+<div class="modal fade" id="supplierDocumentsModal" tabindex="-1" aria-labelledby="supplierDocumentsModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="supplierDocumentsModalLabel">Документы поставщика</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="documents-supplier-id">
+                <form id="supplier-document-form" class="border rounded p-3 mb-3" style="display: none;">
+                    <div class="row g-2">
+                        <div class="col-md-4">
+                            <label for="document-type" class="form-label">Тип документа</label>
+                            <select id="document-type" class="form-select" required>
+                                <option value="contract">Договор</option>
+                                <option value="certificate">Сертификат</option>
+                                <option value="requisites">Реквизиты</option>
+                                <option value="price_list">Прайс-лист</option>
+                                <option value="other">Другое</option>
+                            </select>
+                        </div>
+                        <div class="col-md-8">
+                            <label for="document-file" class="form-label">Файл</label>
+                            <input type="file" id="document-file" class="form-control" required>
+                        </div>
+                    </div>
+                    <div class="mt-2">
+                        <label for="document-description" class="form-label">Описание</label>
+                        <input type="text" id="document-description" class="form-control" maxlength="255">
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-sm mt-3">Загрузить документ</button>
+                </form>
+                <div id="supplier-documents-list"></div>
             </div>
         </div>
     </div>

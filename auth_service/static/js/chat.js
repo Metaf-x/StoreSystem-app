@@ -94,8 +94,7 @@ function renderChatList(chats) {
         // по умолчанию скрыта
         btnAdd.style.display = 'none';
 
-        // Если user — супер-админ
-        if (window.isSuperAdmin === true) {
+        if (window.isOperator === true) {
             btnAdd.style.display = 'block';
         }
 

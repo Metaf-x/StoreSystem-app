@@ -1,15 +1,18 @@
 # routes.py
-from fastapi import APIRouter, Depends, HTTPException, status, Query, File, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, status, Query, File, UploadFile, Form
+from fastapi.responses import FileResponse
 import asyncio
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from uuid import UUID
+from uuid import UUID, uuid4
 from app import crud, schemas, database, auth, logger, models
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.database import get_session_local, Product, ProductWarehouse
-from app.config import UPLOAD_DIR
+from app.config import UPLOAD_DIR, SUPPLIER_DOCUMENTS_DIR
 import shutil
 from typing import Optional
+from datetime import datetime
+from pathlib import Path
 
 
 router = APIRouter()
@@ -19,12 +22,43 @@ security = HTTPBearer()
 
 # Путь для загрузки изображений
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+SUPPLIER_DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
+
+ALLOWED_SUPPLIER_DOCUMENT_TYPES = {
+    "contract",
+    "certificate",
+    "requisites",
+    "price_list",
+    "other",
+}
+MAX_SUPPLIER_DOCUMENT_SIZE = 10 * 1024 * 1024
+
+
+def _get_user_data(
+    credentials: HTTPAuthorizationCredentials,
+    require_admin: bool = False,
+    minimum_role: str = "customer",
+):
+    return auth.verify_token_in_other_service(
+        credentials.credentials, require_admin=require_admin, minimum_role=minimum_role)
+
+
+def _get_supplier_or_404(db: Session, supplier_id: UUID):
+    supplier = db.query(models.Supplier).filter(
+        models.Supplier.supplier_id == supplier_id).first()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    return supplier
+
+
+def _supplier_document_path(supplier_id: UUID, stored_filename: str) -> Path:
+    return SUPPLIER_DOCUMENTS_DIR / str(supplier_id) / stored_filename
 
 
 @router.post("/upload", summary="Upload product image")
 async def upload_image(file: UploadFile = File(...), credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
-    user_data = auth.verify_token_in_other_service(token)
+    user_data = auth.verify_token_in_other_service(token, minimum_role="operator")
     if not user_data:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                             detail="Invalid token or unauthorized access")
@@ -49,7 +83,7 @@ async def upload_image(file: UploadFile = File(...), credentials: HTTPAuthorizat
 async def create_product(product: schemas.ProductCreate, db: Session = Depends(get_session_local), credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
     user_data = auth.verify_token_in_other_service(
-        token)  # Проверяем токен через auth.py
+        token, minimum_role="operator")  # Проверяем токен через auth.py
     logger.log_message(
         f"User {user_data}")
     if not user_data:
@@ -73,7 +107,7 @@ async def create_product(product: schemas.ProductCreate, db: Session = Depends(g
             status_code=422, detail="This product is already existed")
 
     logger.log_message(f"User {user_data} is creating a new product")
-    return crud.create_product(db=db, name=product.name, description=product.description, user_id=user_data,
+    return crud.create_product(db=db, name=product.name, description=product.description, user_id=user_data["user_id"],
                                category=product.category, price=product.price, stock_quantity=product.stock_quantity,
                                supplier_id=product.supplier_id, image_url=product.image_url, weight=product.weight,
                                dimensions=product.dimensions, manufacturer=product.manufacturer)
@@ -120,7 +154,7 @@ def get_product(product_id: str, db: Session = Depends(get_session_local), crede
 @router.put("/products/{product_id}", response_model=schemas.Product, tags=["Products Service"], summary="Update product by ID")
 async def update_product(product_id: str, product: schemas.ProductUpdate, db: Session = Depends(get_session_local), credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
-    user_data = auth.verify_token_in_other_service(token)
+    user_data = auth.verify_token_in_other_service(token, minimum_role="operator")
     if not user_data:
         logger.log_message("Invalid token or unauthorized access")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
@@ -158,7 +192,7 @@ async def update_product(product_id: str, product: schemas.ProductUpdate, db: Se
 @router.patch("/products/{product_id}", response_model=schemas.ProductPatchResponse, tags=["Products Service"], summary="Partially update availablity of product by ID")
 async def partial_update_product(product_id: str, availability_data: schemas.ProductAvailabilityUpdate, db: Session = Depends(get_session_local), credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
-    user_data = auth.verify_token_in_other_service(token)
+    user_data = auth.verify_token_in_other_service(token, minimum_role="operator")
     if not user_data:
         logger.log_message("Invalid token or unauthorized access")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
@@ -201,7 +235,7 @@ async def partial_update_product(product_id: str, availability_data: schemas.Pro
 def delete_product(product_id: str, db: Session = Depends(get_session_local), credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
     user_data = auth.verify_token_in_other_service(
-        token)  # Проверяем токен через auth.py
+        token, minimum_role="operator")  # Проверяем токен через auth.py
     if not user_data:
         logger.log_message("Invalid token or unauthorized access")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
@@ -251,7 +285,7 @@ def search_products(name: str, db: Session = Depends(get_session_local), credent
 def create_supplier(supplier: schemas.SupplierCreate, db: Session = Depends(get_session_local), credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
     user_data = auth.verify_token_in_other_service(
-        token)  # Проверяем токен через auth.py
+        token, minimum_role="operator")  # Проверяем токен через auth.py
     if not user_data:
         logger.log_message("Invalid token or unauthorized access")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
@@ -317,7 +351,7 @@ def get_supplier_by_id(supplier_id: str, db: Session = Depends(get_session_local
 def patch_supplier(supplier_id: str, supplier: schemas.SupplierUpdate, db: Session = Depends(get_session_local), credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
     user_data = auth.verify_token_in_other_service(
-        token)  # Проверяем токен через auth.py
+        token, minimum_role="operator")  # Проверяем токен через auth.py
     if not user_data:
         logger.log_message("Invalid token or unauthorized access")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
@@ -344,7 +378,7 @@ def patch_supplier(supplier_id: str, supplier: schemas.SupplierUpdate, db: Sessi
 def delete_supplier(supplier_id: str, db: Session = Depends(get_session_local), credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
     user_data = auth.verify_token_in_other_service(
-        token)  # Проверяем токен через auth.py
+        token, minimum_role="operator")  # Проверяем токен через auth.py
     if not user_data:
         logger.log_message("Invalid token or unauthorized access")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
@@ -372,6 +406,15 @@ def delete_supplier(supplier_id: str, db: Session = Depends(get_session_local), 
             detail=f"Cannot delete supplier {supplier_id}: It is still associated with product {product_with_supplier.name} (ID: {product_with_supplier.product_id})"
         )
 
+    supplier_document = db.query(models.SupplierDocument).filter(
+        models.SupplierDocument.supplier_id == supplier_uuid
+    ).first()
+    if supplier_document:
+        raise HTTPException(
+            status_code=422,
+            detail="Cannot delete supplier: there are documents linked to this supplier."
+        )
+
     logger.log_message(f"Deleting supplier with id {supplier_id}")
     return crud.delete_supplier(db, supplier_uuid)
 
@@ -387,6 +430,127 @@ def search_suppliers(name: str, db: Session = Depends(get_session_local), creden
 
     logger.log_message(f"Searching suppliers with name containing '{name}'")
     return crud.search_suppliers_by_name(db, name)
+
+
+@router.post("/suppliers/{supplier_id}/documents", response_model=schemas.SupplierDocument, tags=["Supplier Documents"], summary="Upload supplier document")
+async def upload_supplier_document(
+    supplier_id: UUID,
+    document_type: str = Form(...),
+    description: Optional[str] = Form(None),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_session_local),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+):
+    user_data = _get_user_data(credentials, minimum_role="operator")
+    _get_supplier_or_404(db, supplier_id)
+
+    if document_type not in ALLOWED_SUPPLIER_DOCUMENT_TYPES:
+        raise HTTPException(status_code=422, detail="Invalid document_type")
+
+    document_id = uuid4()
+    suffix = Path(file.filename or "").suffix
+    stored_filename = f"{document_id}{suffix}"
+    supplier_dir = SUPPLIER_DOCUMENTS_DIR / str(supplier_id)
+    supplier_dir.mkdir(parents=True, exist_ok=True)
+    file_path = supplier_dir / stored_filename
+
+    file_size = 0
+    try:
+        with file_path.open("wb") as buffer:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                file_size += len(chunk)
+                if file_size > MAX_SUPPLIER_DOCUMENT_SIZE:
+                    raise HTTPException(
+                        status_code=413, detail="Document size must not exceed 10 MB")
+                buffer.write(chunk)
+    except HTTPException:
+        file_path.unlink(missing_ok=True)
+        raise
+    finally:
+        await file.close()
+
+    document = models.SupplierDocument(
+        document_id=document_id,
+        supplier_id=supplier_id,
+        document_type=document_type,
+        original_filename=file.filename or stored_filename,
+        stored_filename=stored_filename,
+        content_type=file.content_type,
+        file_size=file_size,
+        uploaded_by=user_data["user_id"],
+        created_at=datetime.utcnow(),
+        description=description,
+    )
+    db.add(document)
+    db.commit()
+    db.refresh(document)
+    return document
+
+
+@router.get("/suppliers/{supplier_id}/documents", response_model=list[schemas.SupplierDocument], tags=["Supplier Documents"], summary="List supplier documents")
+def list_supplier_documents(
+    supplier_id: UUID,
+    db: Session = Depends(get_session_local),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+):
+    _get_user_data(credentials)
+    _get_supplier_or_404(db, supplier_id)
+    return db.query(models.SupplierDocument).filter(
+        models.SupplierDocument.supplier_id == supplier_id
+    ).order_by(models.SupplierDocument.created_at.desc()).all()
+
+
+@router.get("/suppliers/{supplier_id}/documents/{document_id}/download", tags=["Supplier Documents"], summary="Download supplier document")
+def download_supplier_document(
+    supplier_id: UUID,
+    document_id: UUID,
+    db: Session = Depends(get_session_local),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+):
+    _get_user_data(credentials)
+    _get_supplier_or_404(db, supplier_id)
+    document = db.query(models.SupplierDocument).filter(
+        models.SupplierDocument.supplier_id == supplier_id,
+        models.SupplierDocument.document_id == document_id,
+    ).first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    file_path = _supplier_document_path(supplier_id, document.stored_filename)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Document file not found")
+
+    return FileResponse(
+        path=file_path,
+        media_type=document.content_type or "application/octet-stream",
+        filename=document.original_filename,
+    )
+
+
+@router.delete("/suppliers/{supplier_id}/documents/{document_id}", tags=["Supplier Documents"], summary="Delete supplier document")
+def delete_supplier_document(
+    supplier_id: UUID,
+    document_id: UUID,
+    db: Session = Depends(get_session_local),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+):
+    _get_user_data(credentials, minimum_role="operator")
+    _get_supplier_or_404(db, supplier_id)
+    document = db.query(models.SupplierDocument).filter(
+        models.SupplierDocument.supplier_id == supplier_id,
+        models.SupplierDocument.document_id == document_id,
+    ).first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    file_path = _supplier_document_path(supplier_id, document.stored_filename)
+    file_path.unlink(missing_ok=True)
+    db.delete(document)
+    db.commit()
+    return {"message": "Document deleted"}
 
 # ---- CRUD операции для складов (Warehouses) ----
 
@@ -432,7 +596,7 @@ def get_all_warehouses(db: Session = Depends(get_session_local), credentials: HT
 def create_warehouse(warehouse: schemas.WarehouseCreate, db: Session = Depends(get_session_local), credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
     user_data = auth.verify_token_in_other_service(
-        token)  # Проверяем токен через auth.py
+        token, minimum_role="operator")  # Проверяем токен через auth.py
     if not user_data:
         logger.log_message("Invalid token or unauthorized access")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
@@ -464,7 +628,7 @@ def create_warehouse(warehouse: schemas.WarehouseCreate, db: Session = Depends(g
 def patch_warehouse(warehouse_id: str, warehouse: schemas.WarehouseUpdate, db: Session = Depends(get_session_local), credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
     user_data = auth.verify_token_in_other_service(
-        token)
+        token, minimum_role="operator")
     if not user_data:
         logger.log_message("Invalid token or unauthorized access")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
@@ -491,7 +655,7 @@ def patch_warehouse(warehouse_id: str, warehouse: schemas.WarehouseUpdate, db: S
 def delete_warehouse(warehouse_id: UUID, db: Session = Depends(get_session_local), credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
     user_data = auth.verify_token_in_other_service(
-        token)  # Проверяем токен через auth.py
+        token, minimum_role="operator")  # Проверяем токен через auth.py
     if not user_data:
         logger.log_message("Invalid token or unauthorized access")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
@@ -536,7 +700,7 @@ def add_product_to_warehouse(
         credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
     token = credentials.credentials
-    user_data = auth.verify_token_in_other_service(token)
+    user_data = auth.verify_token_in_other_service(token, minimum_role="operator")
     if not user_data:
         logger.log_message("Invalid token or unauthorized access")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
@@ -603,7 +767,7 @@ def update_product_in_warehouse(
 ):
     token = credentials.credentials
     user_data = auth.verify_token_in_other_service(
-        token)  # Проверяем токен через auth.py
+        token, minimum_role="operator")  # Проверяем токен через auth.py
     if not user_data:
         logger.log_message("Invalid token or unauthorized access")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
@@ -667,7 +831,7 @@ def update_product_in_warehouse(
 def delete_product_from_warehouse(product_warehouse_id: UUID, product_id: UUID, db: Session = Depends(get_session_local), credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
     user_data = auth.verify_token_in_other_service(
-        token)  # Проверяем токен через auth.py
+        token, minimum_role="operator")  # Проверяем токен через auth.py
     if not user_data:
         logger.log_message("Invalid token or unauthorized access")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,

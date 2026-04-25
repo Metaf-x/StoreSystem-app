@@ -7,6 +7,9 @@ document.addEventListener("DOMContentLoaded", async function () {
         window.location.href = '/login';
         return;
     }
+    if (typeof fetchRoleStatus === "function") {
+        await fetchRoleStatus();
+    }
 
     const warehouseId = getWarehouseIdFromUrl();
 
@@ -132,13 +135,14 @@ function renderProductsTable(products) {
 
     products.forEach((product) => {
         const row = document.createElement("tr");
+        const canWrite = window.isOperator === true;
         row.innerHTML = `
             <td>${product.product_id}</td>
             <td>${product.name}</td>
             <td>${product.stock_quantity}</td>
             <td>
-                <button class="btn btn-sm btn-warning" onclick="openEditProductModal('${product.product_warehouse_id}', '${product.product_id}')">Редактировать</button>
-                <button class="btn btn-sm btn-danger" onclick="deleteProduct('${product.product_warehouse_id}', '${product.product_id}')">Удалить</button>
+                ${canWrite ? `<button class="btn btn-sm btn-warning" onclick="openEditProductModal('${product.product_warehouse_id}', '${product.product_id}')">Редактировать</button>
+                <button class="btn btn-sm btn-danger" onclick="deleteProduct('${product.product_warehouse_id}', '${product.product_id}')">Удалить</button>` : ""}
             </td>
         `;
         tableBody.appendChild(row);

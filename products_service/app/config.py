@@ -7,3 +7,6 @@ SQLALCHEMY_DATABASE_URI = "postgresql://storage_admin:THw7l0bxvPPkWUhP@db_produc
 
 UPLOAD_DIR = Path("img")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+SUPPLIER_DOCUMENTS_DIR = Path("uploads") / "supplier_documents"
+SUPPLIER_DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)

@@ -360,6 +360,7 @@ services:
     container_name: products_service
     volumes:
       - ./products_service/logs:/app/logs
+      - ./products_service/uploads:/app/uploads
     depends_on:
       kafka:
         condition: service_healthy

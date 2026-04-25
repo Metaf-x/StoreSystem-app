@@ -443,6 +443,21 @@ class Supplier(SupplierBase):
         orm_mode = True
 
 
+class SupplierDocument(BaseModel):
+    document_id: UUID
+    supplier_id: UUID
+    document_type: str
+    original_filename: str
+    content_type: Optional[str] = None
+    file_size: int
+    uploaded_by: str
+    created_at: datetime
+    description: Optional[str] = None
+
+    class Config:
+        orm_mode = True
+
+
 class SupplierSearch(BaseModel):
     name: Optional[constr(min_length=1, max_length=100)] = None
 

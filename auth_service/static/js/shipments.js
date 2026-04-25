@@ -88,6 +88,8 @@ function renderOrders(orders) {
                         Дата создания: ${new Date(order.createdAt).toLocaleString()}
                     </p>
                     <ul>${itemsHTML}</ul>
+                    <button class="btn btn-outline-primary btn-sm me-2" onclick="downloadOrderDocument('${order.orderId}', 'invoice')">Скачать счёт</button>
+                    <button class="btn btn-outline-primary btn-sm me-2" onclick="downloadOrderDocument('${order.orderId}', 'shipment')">Скачать отгрузочный документ</button>
                     ${order.status === "pending" ? `
                         <button class="btn btn-danger btn-sm" onclick="cancelOrder('${order.orderId}')">Отменить заказ</button>
                     ` : ""}
@@ -139,4 +141,27 @@ async function cancelOrder(orderId) {
         console.error("Ошибка отмены заказа:", error);
         alert("Ошибка при отмене заказа.");
     }
+}
+
+async function downloadOrderDocument(orderId, documentKind) {
+    const token = await getTokenFromDatabase();
+    const filename = `${documentKind}-${orderId}.pdf`;
+    const response = await fetch(`http://${window.location.hostname}:8003/orders/${orderId}/documents/${documentKind}.pdf`, {
+        headers: { "Authorization": `Bearer ${token}` }
+    });
+
+    if (!response.ok) {
+        alert("Ошибка при скачивании документа.");
+        return;
+    }
+
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
 }

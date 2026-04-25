@@ -2,8 +2,11 @@
 from pydantic import BaseModel
 from pydantic import BaseModel, EmailStr, constr, validator, Field
 import re
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
+
+
+UserRole = Literal["customer", "operator", "admin"]
 
 
 class UserCreate(BaseModel):
@@ -57,6 +60,7 @@ class User(BaseModel):
     id: UUID
     name: str
     email: EmailStr
+    role: UserRole = "customer"
 
 
 class RegistrationResponse(BaseModel):
@@ -105,13 +109,7 @@ class TokenRequestSchema(BaseModel):
 class TokenValidationResponseSchema(BaseModel):
     valid: bool
     user_id: Optional[str] = None
-    error: Optional[str] = None
-
-
-class TokenValidationWithAdminResponseSchema(BaseModel):
-    valid: bool
-    user_id: Optional[str] = None
-    is_superadmin: Optional[bool] = None
+    role: Optional[UserRole] = None
     error: Optional[str] = None
 
 
@@ -119,8 +117,11 @@ class LogoutResponseSchema(BaseModel):
     detail: str
 
 
-class SuperadminStatusResponseSchema(BaseModel):
-    is_superadmin: bool
+class MeResponseSchema(BaseModel):
+    id: str
+    name: str
+    email: str
+    role: UserRole
 
 
 class UserUpdate(BaseModel):
@@ -159,7 +160,7 @@ class UserResponse(BaseModel):
     id: str
     name: str
     email: str
-    role: str
+    role: UserRole
 
     class Config:
         orm_mode = True
@@ -175,3 +176,7 @@ class PaginatedUserResponse(BaseModel):
 
 class ProductIdSchema(BaseModel):
     product_id: str
+
+
+class UserRoleUpdate(BaseModel):
+    role: UserRole

@@ -7,6 +7,9 @@ document.addEventListener("DOMContentLoaded", async function () {
         // Если токен недействителен, перенаправление на страницу логина уже выполнено
         return;
     }
+    if (typeof fetchRoleStatus === "function") {
+        await fetchRoleStatus();
+    }
 
     initializeProducts();
 
@@ -439,6 +442,7 @@ async function deleteProduct(productId) {
 function renderProductsTable(products) {
     const tableBody = document.querySelector("#products-table tbody");
     tableBody.innerHTML = "";
+    const canWrite = window.isOperator === true;
 
     products.forEach((product) => {
         const row = document.createElement("tr");
@@ -449,8 +453,8 @@ function renderProductsTable(products) {
             <td>${product.category || ""}</td>
             <td>${product.price + " руб" || ""}</td>
             <td class="text-center">
-                <button class="btn btn-sm btn-outline-warning mt-2" data-id="${product.product_id}">Редактировать</button>
-                <button class="btn btn-sm btn-outline-danger mt-2" data-id="${product.product_id}">Удалить</button>
+                ${canWrite ? `<button class="btn btn-sm btn-outline-warning mt-2" data-id="${product.product_id}">Редактировать</button>
+                <button class="btn btn-sm btn-outline-danger mt-2" data-id="${product.product_id}">Удалить</button>` : ""}
             </td>
         `;
         tableBody.appendChild(row);

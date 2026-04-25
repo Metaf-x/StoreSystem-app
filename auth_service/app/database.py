@@ -1,5 +1,6 @@
 # database.py
 from sqlalchemy import create_engine
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import sessionmaker
 
 from app.config import (
@@ -20,7 +21,29 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 def init_db():
     # Регистрируем таблицы из единого metadata объекта моделей.
     models.Base.metadata.create_all(bind=engine)
+    migrate_user_roles()
     seed_superadmin()
+
+
+def migrate_user_roles():
+    inspector = inspect(engine)
+    if "users" not in inspector.get_table_names():
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("users")}
+    with engine.begin() as connection:
+        if "role" not in columns:
+            connection.execute(text(
+                "ALTER TABLE users ADD COLUMN role VARCHAR NOT NULL DEFAULT 'customer'"
+            ))
+        if "is_superadmin" in columns:
+            connection.execute(text(
+                "UPDATE users SET role = CASE WHEN is_superadmin THEN 'admin' ELSE 'customer' END "
+                "WHERE role IS NULL OR role = 'customer'"
+            ))
+        connection.execute(text(
+            "UPDATE users SET role = 'customer' WHERE role NOT IN ('customer', 'operator', 'admin')"
+        ))
 
 
 def seed_superadmin():
@@ -33,12 +56,13 @@ def seed_superadmin():
         email = SEED_SUPERADMIN_EMAIL.strip().lower()
         existing_user = crud.get_user_by_email(db, email)
         if existing_user:
-            if not existing_user.is_superadmin:
+            if existing_user.role != "admin":
+                existing_user.role = "admin"
                 existing_user.is_superadmin = True
                 db.commit()
                 db.refresh(existing_user)
                 logger.log_message(
-                    f"Existing seed user {email} promoted to super admin."
+                    f"Existing seed user {email} promoted to admin."
                 )
             return existing_user
 
@@ -50,9 +74,9 @@ def seed_superadmin():
         created_user = crud.create_user(
             db=db,
             user=seed_user,
-            is_superadmin=True,
+            role="admin",
         )
-        logger.log_message(f"Seed superadmin {email} has been created.")
+        logger.log_message(f"Seed admin {email} has been created.")
         return created_user
     except Exception as exc:
         logger.log_message(f"Seed superadmin failed: {exc}")

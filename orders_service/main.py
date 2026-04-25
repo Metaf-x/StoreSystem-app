@@ -3,7 +3,7 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from strawberry.fastapi import GraphQLRouter
-from app import database, logger
+from app import database, logger, routes
 from app.kafka import start_consumer
 from app.graphql import schema
 from app.database import init_db, SessionLocal
@@ -47,3 +47,4 @@ graphql_app = GraphQLRouter(schema, context_getter=get_context)
 
 # Добавляем маршруты для GraphQL-приложения
 app.include_router(graphql_app, prefix="/graphql")
+app.include_router(routes.router)

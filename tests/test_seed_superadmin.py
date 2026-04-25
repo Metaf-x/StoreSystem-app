@@ -59,12 +59,13 @@ class _FakeDb:
 
 
 class _ExistingUser:
-    def __init__(self, is_superadmin=False):
+    def __init__(self, role="customer", is_superadmin=False):
+        self.role = role
         self.is_superadmin = is_superadmin
 
 
 class CreateUserTest(unittest.TestCase):
-    def test_create_user_persists_superadmin_flag(self):
+    def test_create_user_persists_admin_role(self):
         db = _FakeDb()
         user = UserCreate(
             name="Super Admin",
@@ -75,6 +76,7 @@ class CreateUserTest(unittest.TestCase):
         crud.create_user(db=db, user=user, is_superadmin=True)
 
         self.assertIsNotNone(db.added)
+        self.assertEqual(db.added.role, "admin")
         self.assertTrue(db.added.is_superadmin)
         self.assertEqual(db.commit_count, 1)
         self.assertEqual(db.refresh_count, 1)
@@ -97,13 +99,13 @@ class SeedSuperadminTest(unittest.TestCase):
         self.assertIs(result, created_user)
         get_user.assert_called_once_with(db, "admin@example.com")
         create_user.assert_called_once()
-        self.assertTrue(create_user.call_args.kwargs["is_superadmin"])
+        self.assertEqual(create_user.call_args.kwargs["role"], "admin")
         self.assertEqual(create_user.call_args.kwargs["user"].email, "admin@example.com")
         self.assertTrue(db.closed)
 
     def test_seed_superadmin_promotes_existing_seed_user(self):
         db = _FakeDb()
-        existing_user = _ExistingUser(is_superadmin=False)
+        existing_user = _ExistingUser(role="customer", is_superadmin=False)
 
         with patch.object(database, "SessionLocal", return_value=db), \
                 patch.object(database, "SEED_SUPERADMIN_ENABLED", True), \
@@ -113,6 +115,7 @@ class SeedSuperadminTest(unittest.TestCase):
             result = database.seed_superadmin()
 
         self.assertIs(result, existing_user)
+        self.assertEqual(existing_user.role, "admin")
         self.assertTrue(existing_user.is_superadmin)
         self.assertEqual(db.commit_count, 1)
         self.assertEqual(db.refresh_count, 1)

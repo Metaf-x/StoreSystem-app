@@ -19,6 +19,8 @@ def init_db():
     # Создаем таблицы поэтапно
     Base.metadata.tables['suppliers'].create(bind=engine, checkfirst=True)
     Base.metadata.tables['products'].create(bind=engine, checkfirst=True)
+    Base.metadata.tables['supplier_documents'].create(
+        bind=engine, checkfirst=True)
     Base.metadata.tables['warehouses'].create(bind=engine, checkfirst=True)
     Base.metadata.tables['product_warehouses'].create(
         bind=engine, checkfirst=True)
@@ -46,6 +48,23 @@ class Supplier(Base):
     country = Column(String)  # Страна поставщика
     city = Column(String)  # Город поставщика
     website = Column(String)  # Вебсайт поставщика
+
+
+class SupplierDocument(Base):
+    __tablename__ = "supplier_documents"
+
+    document_id = Column(UUID(as_uuid=True), primary_key=True,
+                         default=uuid.uuid4, unique=True, index=True)
+    supplier_id = Column(UUID(as_uuid=True), ForeignKey(
+        "suppliers.supplier_id"), nullable=False, index=True)
+    document_type = Column(String, nullable=False)
+    original_filename = Column(String, nullable=False)
+    stored_filename = Column(String, nullable=False)
+    content_type = Column(String)
+    file_size = Column(Integer, nullable=False)
+    uploaded_by = Column(String, nullable=False)
+    created_at = Column(DateTime)
+    description = Column(String)
 
 
 class Product(Base):

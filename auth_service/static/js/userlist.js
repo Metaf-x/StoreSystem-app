@@ -7,6 +7,11 @@ let currentRoleFilter = "all";
 let currentPageSize = 10;
 let searchTimeout = null;
 let authToken = null;
+const roleLabels = {
+    customer: "Клиент",
+    operator: "Оператор",
+    admin: "Администратор",
+};
 
 document.addEventListener("DOMContentLoaded", async function () {
     const token = await getTokenFromDatabase();
@@ -100,16 +105,22 @@ function renderUserTable(users) {
         <td>${user.id}</td>
         <td>${user.name}</td>
         <td>${user.email}</td>
-        <td>${user.role === 'superadmin' ? 'супер-админ' : 'пользователь'}</td>
-        <td>${user.role !== 'superadmin' ? `<button class="btn btn-sm btn-success promote-btn" data-id="${user.id}">Повысить до супер-админа</button>` : ''}</td>
+        <td>${roleLabels[user.role] || user.role}</td>
+        <td>
+            <select class="form-select form-select-sm role-select" data-id="${user.id}">
+                <option value="customer"${user.role === 'customer' ? ' selected' : ''}>Клиент</option>
+                <option value="operator"${user.role === 'operator' ? ' selected' : ''}>Оператор</option>
+                <option value="admin"${user.role === 'admin' ? ' selected' : ''}>Администратор</option>
+            </select>
+        </td>
     `;
         userTableBody.appendChild(row);
     });
 
-    document.querySelectorAll(".promote-btn").forEach(button => {
-        button.addEventListener("click", function () {
+    document.querySelectorAll(".role-select").forEach(select => {
+        select.addEventListener("change", function () {
             const userId = this.getAttribute("data-id");
-            promoteUserToSuperadmin(userId);
+            updateUserRole(userId, this.value);
         });
     });
 }
@@ -253,21 +264,21 @@ function updateSortIndicators() {
     });
 }
 
-async function promoteUserToSuperadmin(userId) {
+async function updateUserRole(userId, role) {
     const token = authToken || await getTokenFromDatabase();
-    fetch(`/users/promote/${userId}`, {
+    fetch(`/users/${userId}/role`, {
         method: 'PUT',
         headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
-        }
+        },
+        body: JSON.stringify({ role })
     })
         .then(response => {
             if (response.ok) {
-                alert("User successfully promoted to super admin.");
                 authToken = token;
                 loadUsers(currentPage).catch(error => {
-                    console.error("Error reloading users after promotion:", error);
+                    console.error("Error reloading users after role update:", error);
                 });
             } else {
                 return response.json().then(data => {
@@ -276,7 +287,8 @@ async function promoteUserToSuperadmin(userId) {
             }
         })
         .catch(error => {
-            console.error("Error promoting user:", error);
-            alert("Error promoting user: " + error.message);
+            console.error("Error updating user role:", error);
+            alert("Error updating user role: " + error.message);
+            loadUsers(currentPage).catch(console.error);
         });
 }

@@ -9,6 +9,7 @@ from app.config import AUTH_SERVICE_URL, SECRET_KEY
 from app import logger
 
 ALGORITHM = "HS256"
+ROLE_ORDER = {"customer": 0, "operator": 1, "admin": 2}
 
 
 def _decode_access_token(token: str):
@@ -36,16 +37,15 @@ def _decode_access_token(token: str):
         )
 
 
-def verify_token_in_other_service(token: str, require_admin: bool = False):
+def verify_token_in_other_service(token: str, require_admin: bool = False, minimum_role: str = "customer"):
     payload = _decode_access_token(token)
     user_id = payload.get("sub")
-
-    if not require_admin:
-        return {"user_id": user_id, "is_superadmin": False}
+    if require_admin:
+        minimum_role = "operator"
 
     headers = {"Content-Type": "application/json"}
     response = requests.post(
-        f"{AUTH_SERVICE_URL}/verify-token-with-admin", json={"token": token}, headers=headers, timeout=5)
+        f"{AUTH_SERVICE_URL}/verify-token", json={"token": token}, headers=headers, timeout=5)
     try:
         response_data = response.json()
     except ValueError:
@@ -57,8 +57,8 @@ def verify_token_in_other_service(token: str, require_admin: bool = False):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             detail="Invalid token or unauthorized access")
     user_id = response_data.get("user_id", user_id)
-    is_admin = response_data.get("is_superadmin", False)
-    if require_admin and not is_admin:
+    role = response_data.get("role", "customer")
+    if ROLE_ORDER.get(role, -1) < ROLE_ORDER.get(minimum_role, 0):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
-                            detail="Requires admin access")
-    return {"user_id": user_id, "is_superadmin": is_admin}
+                            detail=f"Requires {minimum_role} access")
+    return {"user_id": response_data.get("user_id", user_id), "role": role}

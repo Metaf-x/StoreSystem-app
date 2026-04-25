@@ -1,5 +1,7 @@
 # main.py
 from fastapi import FastAPI, Request, Depends, HTTPException, status
+from datetime import datetime
+
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
@@ -8,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app import routes, database, logger, crud, kafka, schemas
 from sqlalchemy.orm import Session
-from app.models import User
+from app.models import Token, User
 from app.database import get_session_local
 from app.auth import verify_token
 import threading
@@ -60,6 +62,33 @@ def startup():
 
 app.include_router(routes.router)
 
+ROLE_ORDER = {"customer": 0, "operator": 1, "admin": 2}
+
+
+def _get_current_user_from_refresh_cookie(request: Request, db: Session):
+    refresh_token = request.cookies.get("refresh_token")
+    if not refresh_token:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    token_record = db.query(Token).filter(
+        Token.refresh_token == refresh_token,
+        Token.refresh_expires_at > datetime.utcnow(),
+    ).first()
+    if not token_record:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    user = db.query(User).filter(User.id == uuid.UUID(token_record.user_id)).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+def _require_page_role(request: Request, db: Session, minimum_role: str):
+    user = _get_current_user_from_refresh_cookie(request, db)
+    if ROLE_ORDER.get(user.role, -1) < ROLE_ORDER[minimum_role]:
+        raise HTTPException(status_code=403, detail="Insufficient rights")
+    return user
+
 # Вспомогательная функция для рендеринга с проверкой роли супер админа
 
 
@@ -84,12 +113,14 @@ def get_warehouses_page(request: Request):
 
 
 @app.get("/pending-approval", response_class=HTMLResponse, include_in_schema=False)
-async def pending_approval_page(request: Request):
+async def pending_approval_page(request: Request, db: Session = Depends(get_session_local)):
+    _require_page_role(request, db, "operator")
     return templates.TemplateResponse("pending_approval.html", {"request": request})
 
 
 @app.get("/user-list", response_class=HTMLResponse, include_in_schema=False)
-def get_user_list(request: Request):
+def get_user_list(request: Request, db: Session = Depends(get_session_local)):
+    _require_page_role(request, db, "admin")
     return templates.TemplateResponse("userlist.html", {"request": request})
 
 
@@ -126,7 +157,8 @@ def chat_ui(request: Request):
 
 
 @app.get("/admin_orders", response_class=HTMLResponse, include_in_schema=False)
-async def pending_approval_page(request: Request):
+async def pending_approval_page(request: Request, db: Session = Depends(get_session_local)):
+    _require_page_role(request, db, "operator")
     return templates.TemplateResponse("admin_orders.html", {"request": request})
 
 
@@ -164,57 +196,45 @@ def _get_current_user_from_access_token(token: str, db: Session):
     return user, user_id
 
 
+def _user_response(user: User):
+    return {
+        "id": str(user.id),
+        "name": user.name,
+        "email": user.email,
+        "role": user.role,
+    }
+
+
 @app.post(
     "/verify-token",
     response_model=schemas.TokenValidationResponseSchema,
     tags=["Auth"],
     summary="Verify access token",
 )
-async def verify_token_endpoint(body: schemas.TokenRequestSchema):
-    try:
-        payload = verify_token(body.token)
-        logger.log_message(f"""Returning from verify_token_endpoint: valid=True, user_id={
-                           payload.get('sub')}""")
-        return {"valid": True, "user_id": payload.get("sub")}
-    except HTTPException as e:
-        return {"valid": False, "error": str(e.detail)}
-
-
-@app.post(
-    "/verify-token-with-admin",
-    response_model=schemas.TokenValidationWithAdminResponseSchema,
-    tags=["Auth"],
-    summary="Verify access token and load admin flag",
-)
-async def verify_token_with_admin_endpoint(
-    body: schemas.TokenRequestSchema, db: Session = Depends(get_session_local)
+async def verify_token_endpoint(
+    body: schemas.TokenRequestSchema,
+    db: Session = Depends(get_session_local),
 ):
     try:
         user, user_id = _get_current_user_from_access_token(body.token, db)
-        is_superadmin = bool(getattr(user, "is_superadmin", False))
-        logger.log_message(
-            f"""Returning from verify_token_with_admin_endpoint: valid=True,
-                user_id={user_id}, is_superadmin={is_superadmin}"""
-        )
-        return {"valid": True, "user_id": user_id, "is_superadmin": is_superadmin}
+        logger.log_message(f"""Returning from verify_token_endpoint: valid=True, user_id={
+                           user_id}, role={user.role}""")
+        return {"valid": True, "user_id": user_id, "role": user.role}
     except HTTPException as e:
         return {"valid": False, "error": str(e.detail)}
-    except Exception as e:
-        logger.log_message(f"Unexpected error: {e}")
-        return {"valid": False, "error": "Unexpected error occurred"}
 
 
 @app.get(
-    "/check-superadmin",
-    response_model=schemas.SuperadminStatusResponseSchema,
+    "/me",
+    response_model=schemas.MeResponseSchema,
     tags=["Auth"],
-    summary="Check whether the current user is a superadmin",
+    summary="Get current user",
 )
-async def check_superadmin(
+async def me(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_session_local)
 ):
     token = credentials.credentials
     user, _ = _get_current_user_from_access_token(token, db)
 
-    return {"is_superadmin": user.is_superadmin}
+    return _user_response(user)

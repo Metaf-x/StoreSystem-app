@@ -82,7 +82,7 @@ def get_db_session(info: Info) -> Session:
         raise Exception("Session не найден в контексте")
 
 
-def get_current_user_id(info: Info, require_admin: bool = False) -> UUID:
+def get_current_user_data(info: Info, minimum_role: str = "customer"):
     request = info.context.get("request")
     if not request:
         raise Exception("Request не найден в контексте")
@@ -97,10 +97,13 @@ def get_current_user_id(info: Info, require_admin: bool = False) -> UUID:
                             detail="Недопустимая схема аутентификации")
     # Проверяем токен
     user_data = auth.verify_token_in_other_service(
-        token, require_admin=require_admin)
-    # Получаем user_id из возвращенного словаря
-    user_id = user_data.get("user_id")
-    return UUID(user_id)
+        token, minimum_role=minimum_role)
+    return user_data
+
+
+def get_current_user_id(info: Info, minimum_role: str = "customer") -> UUID:
+    user_data = get_current_user_data(info, minimum_role=minimum_role)
+    return UUID(user_data.get("user_id"))
 
 
 @strawberry.type
@@ -125,17 +128,15 @@ class Query:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                                 detail="Недопустимая схема аутентификации")
 
-            # Предположим, что verify_token_in_other_service вернет словарь,
-        # в котором есть ключи "user_id" и "is_superadmin"
         user_data = auth.verify_token_in_other_service(token)
         user_id = UUID(user_data.get("user_id"))
-        is_superadmin = user_data.get("is_superadmin", False)
+        role = user_data.get("role", "customer")
 
         if not order:
             raise Exception("Заказ не найден")
 
         # Проверяем, имеет ли пользователь право просматривать этот заказ
-        if not is_superadmin and order.user_id != user_id:
+        if role not in {"operator", "admin"} and order.user_id != user_id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                                 detail="Нет прав для просмотра этого заказа")
         return OrderType(
@@ -187,7 +188,7 @@ class Query:
     @strawberry.field
     def list_all_orders(self, info: Info) -> List[OrderType]:
         db = get_db_session(info)
-        user_id = get_current_user_id(info, require_admin=True)
+        user_id = get_current_user_id(info, minimum_role="operator")
         orders = get_all_orders_crud(db)
         return [
             OrderType(
@@ -303,18 +304,11 @@ class Mutation:
         if not order:
             raise Exception("Заказ не найден")
 
-        # Получаем данные пользователя включая is_superadmin
         request = info.context.get("request")
         auth_header = request.headers.get("Authorization")
         scheme, _, token = auth_header.partition(" ")
-        user_data = auth.verify_token_in_other_service(token)
+        user_data = auth.verify_token_in_other_service(token, minimum_role="operator")
         user_id = UUID(user_data.get("user_id"))
-        is_superadmin = user_data.get("is_superadmin", False)
-
-        # Проверяем, имеет ли пользователь право обновлять этот заказ
-        if not is_superadmin and order.user_id != user_id:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
-                                detail="Нет прав для обновления этого заказа")
 
         # Проверяем текущий статус заказа
         if order.status in [OrderStatus.completed, OrderStatus.cancelled]:

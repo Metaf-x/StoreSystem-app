@@ -18,13 +18,40 @@ from app.approval_queue import remove_product_from_pending
 router = APIRouter()
 templates = Jinja2Templates(directory="templates")
 redis_client = redis.Redis(host='redis', port=6379, db=0)
+ROLE_ORDER = {"customer": 0, "operator": 1, "admin": 2}
 
 # Создаем объект security для использования схемы авторизации Bearer
 security = HTTPBearer()
 
 
+def _require_role(user: User, minimum_role: str):
+    role = getattr(user, "role", "customer")
+    if ROLE_ORDER.get(role, -1) < ROLE_ORDER[minimum_role]:
+        raise HTTPException(status_code=403, detail="Insufficient rights")
+    return user
+
+
+def get_current_user(
+    db: Session = Depends(get_session_local),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+):
+    token_data = auth.verify_token(credentials.credentials, db=db)
+    user = crud.get_user_by_id(db, uuid.UUID(token_data["sub"]))
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+def require_admin(current_user: User = Depends(get_current_user)):
+    return _require_role(current_user, "admin")
+
+
+def require_operator(current_user: User = Depends(get_current_user)):
+    return _require_role(current_user, "operator")
+
+
 @router.post("/remove-from-pending/", tags=["Approval"], summary="Remove product from approval queue")
-def remove_from_pending(product: schemas.ProductIdSchema):
+def remove_from_pending(product: schemas.ProductIdSchema, current_user: User = Depends(require_operator)):
     """
     Удаляет product_id из очереди на одобрение в Redis.
     """
@@ -101,7 +128,7 @@ def register_user(user: schemas.UserCreate, db: Session = Depends(database.get_s
 
         # Суперадмин не может быть установлен через регистрацию
         created_user = crud.create_user(db=db, user=user.copy(
-            update={"email": user_email}), is_superadmin=False)
+            update={"email": user_email}), role="customer")
         logger.log_message(f"User is registered: {user.email}")
 
         # Перенаправляем на страницу авторизации
@@ -110,7 +137,8 @@ def register_user(user: schemas.UserCreate, db: Session = Depends(database.get_s
             "user": {
                 "id": created_user.id,
                 "name": created_user.name,
-                "email": created_user.email
+                "email": created_user.email,
+                "role": created_user.role,
             }
         }
     except HTTPException as http_exc:
@@ -170,18 +198,19 @@ def login_for_access_token(
     }
 
 
-# Повышение прав до супер-админа (только для супер-админа)
-@router.put("/users/promote/{user_id}", status_code=200, tags=["Superadmin"], summary="Promote to superadmin", responses={
-    200: {"description": "User successfully promoted to super admin", "content": {"application/json": {"example": {"detail": "User successfully promoted to super admin"}}}},
+@router.put("/users/{user_id}/role", status_code=200, tags=["Admin"], summary="Update user role", responses={
+    200: {"description": "User role successfully updated", "content": {"application/json": {"example": {"detail": "User role successfully updated"}}}},
     400: {"description": "Bad Request - User ID is required", "content": {"application/json": {"example": {"detail": "User ID is required"}}}},
     403: {"description": "Insufficient rights", "content": {"application/json": {"example": {"detail": "Insufficient rights"}}}},
     404: {"description": "User not found", "content": {"application/json": {"example": {"detail": "User not found"}}}},
-    422: {"description": "This user is already a super admin", "content": {"application/json": {"example": {"detail": "This user is already a super admin"}}}},
     422: {"description": "Invalid UUID format", "content": {"application/json": {"example": {"detail": "Invalid UUID format"}}}},
 })
-def promote_user_to_superadmin(user_id: str,
-                               db: Session = Depends(get_session_local),
-                               credentials: HTTPAuthorizationCredentials = Depends(security)):
+def update_user_role(
+    user_id: str,
+    form_data: schemas.UserRoleUpdate,
+    db: Session = Depends(get_session_local),
+    requesting_user: User = Depends(require_admin),
+):
     # Проверка, что user_id не пустой
     if not user_id.strip():
         raise HTTPException(status_code=400, detail="User ID is required")
@@ -192,40 +221,28 @@ def promote_user_to_superadmin(user_id: str,
     except ValueError:
         raise HTTPException(status_code=422, detail="Invalid UUID format")
 
-    # Получаем токен из заголовка Authorization
-    token = credentials.credentials
-
-    # Проверяем токен
-    token_data = auth.verify_token(token, db=db)
-    requesting_user = crud.get_user_by_id(db, uuid.UUID(token_data["sub"]))
-
-    # Проверяем права (только супер-админ может повышать других пользователей)
-    if not requesting_user.is_superadmin:
-        raise HTTPException(status_code=403, detail="Insufficient rights")
-
     user = crud.get_user_by_id(db, user_uuid)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Проверяем, является ли изменяемый пользователь уже супер-админом
-    if user.is_superadmin:
+    if user.role == "admin" and form_data.role != "admin" and crud.count_users_by_role(db, "admin") <= 1:
         raise HTTPException(
-            status_code=422, detail="This user is already a super admin")
+            status_code=403, detail="Cannot remove the last admin role")
 
-    # Повышаем пользователя до супер-админа
-    promoted_user = crud.promote_to_superadmin(db, user_uuid)
-    if not promoted_user:
+    updated_user = crud.update_user_role(db, user_uuid, form_data.role)
+    if not updated_user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    logger.log_message(f"User {promoted_user.email} promoted to super admin.")
-    return {"detail": "User successfully promoted to super admin"}
+    logger.log_message(
+        f"Admin {requesting_user.email} changed user {updated_user.email} role to {updated_user.role}.")
+    return {"detail": "User role successfully updated", "role": updated_user.role}
 
 
 # Получение списка пользователей (только для супер-админа)
-@router.get("/users", response_model=schemas.PaginatedUserResponse, tags=["Superadmin"], summary="Get users")
+@router.get("/users", response_model=schemas.PaginatedUserResponse, tags=["Admin"], summary="Get users")
 def get_users(
     db: Session = Depends(get_session_local),
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    requesting_user: User = Depends(get_current_user),
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
     sort_by: str = Query("name"),
@@ -233,16 +250,7 @@ def get_users(
     search: Optional[str] = Query(default=None, max_length=200),
     role: Optional[str] = Query(default=None),
 ):
-    # Получаем токен из заголовка Authorization
-    token = credentials.credentials
-
-    # Проверяем токен
-    token_data = auth.verify_token(token, db=db)
-    requesting_user = crud.get_user_by_id(db, uuid.UUID(token_data["sub"]))
-    if not requesting_user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    if requesting_user.is_superadmin:
+    if requesting_user.role == "admin":
         allowed_sort_fields = {"id", "name", "email", "role"}
         if sort_by not in allowed_sort_fields:
             raise HTTPException(
@@ -257,7 +265,7 @@ def get_users(
                 detail=f"Unsupported sort order: {order}"
             )
 
-        allowed_role_filters = {None, "", "all", "user", "superadmin"}
+        allowed_role_filters = {None, "", "all", "customer", "operator", "admin"}
         if role not in allowed_role_filters:
             raise HTTPException(
                 status_code=422,
@@ -279,7 +287,7 @@ def get_users(
         total = 1
         page = 1
         page_size = 1
-        role = "user"
+        role = "customer"
 
     result = []
     for user in users:
@@ -287,7 +295,7 @@ def get_users(
             "id": str(user.id),
             "name": user.name,
             "email": user.email,
-            "role": "superadmin" if user.is_superadmin else "user"
+            "role": user.role,
         })
 
     total_pages = (total + page_size - 1) // page_size if total else 0
@@ -309,8 +317,8 @@ def get_users(
     404: {"description": "User not found", "content": {"application/json": {"example": {"detail": "User not found"}}}},
     422: {"description": "Invalid UUID format", "content": {"application/json": {"example": {"detail": "Invalid UUID format"}}}},
     422: {"description": "Email already registered", "content": {"application/json": {"example": {"detail": "Email already registered"}}}},
-}, tags=["Superadmin"], summary="Edit user")
-def edit_user(user_id: str, form_data: schemas.UserUpdate, db: Session = Depends(get_session_local), credentials: HTTPAuthorizationCredentials = Depends(security)):
+}, tags=["Admin"], summary="Edit user")
+def edit_user(user_id: str, form_data: schemas.UserUpdate, db: Session = Depends(get_session_local), requesting_user: User = Depends(require_admin)):
 
     # Проверка, что user_id не пустой
     if not user_id.strip():
@@ -321,15 +329,6 @@ def edit_user(user_id: str, form_data: schemas.UserUpdate, db: Session = Depends
         user_uuid = uuid.UUID(user_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid UUID format")
-
-    # Получаем токен и проверяем права
-    token = credentials.credentials
-    token_data = auth.verify_token(token, db=db)
-    requesting_user = crud.get_user_by_id(db, uuid.UUID(token_data["sub"]))
-
-    # Проверка на права (только супер-админ может изменять пользователей)
-    if not requesting_user.is_superadmin:
-        raise HTTPException(status_code=403, detail="Insufficient rights")
 
     # Проверяем, существует ли пользователь с таким user_id
     user = crud.get_user_by_id(db, user_uuid)
@@ -355,7 +354,8 @@ def edit_user(user_id: str, form_data: schemas.UserUpdate, db: Session = Depends
         "user": {
             "id": user.id,
             "name": user.name,
-            "email": user.email
+            "email": user.email,
+            "role": user.role,
         }
     }
 
@@ -368,10 +368,10 @@ def edit_user(user_id: str, form_data: schemas.UserUpdate, db: Session = Depends
     403: {"description": "Insufficient rights or attempt to delete own account", "content": {"application/json": {"example": {"detail": "Insufficient rights"}}}},
     404: {"description": "User not found", "content": {"application/json": {"example": {"detail": "User not found"}}}},
     422: {"description": "Invalid UUID format", "content": {"application/json": {"example": {"detail": "Invalid UUID format"}}}},
-}, tags=["Superadmin"], summary="Delete user")
+}, tags=["Admin"], summary="Delete user")
 def delete_user(user_id: str,
-                credentials: HTTPAuthorizationCredentials = Depends(security),
-                db: Session = Depends(get_session_local)):
+                db: Session = Depends(get_session_local),
+                requesting_user: User = Depends(require_admin)):
 
     # Проверка, что user_id не пустой
     if not user_id.strip():
@@ -383,43 +383,33 @@ def delete_user(user_id: str,
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid UUID format")
 
-    # Извлекаем и проверяем токен
-    token = credentials.credentials
-    token_data = auth.verify_token(token, db=db)
-
-    # Проверяем права (например, только супер-админ может удалять пользователей)
-    requesting_user = crud.get_user_by_id(db, uuid.UUID(token_data["sub"]))
-    if not requesting_user.is_superadmin:
-        raise HTTPException(status_code=403, detail="Insufficient rights")
-
     # Проверяем, пытается ли супер-админ удалить свой собственный аккаунт
     if str(requesting_user.id) == user_id:
         raise HTTPException(
             status_code=403, detail="Super admin cannot delete own account")
 
     # Удаление пользователя
+    user_to_delete = crud.get_user_by_id(db, user_uuid)
+    if user_to_delete and user_to_delete.role == "admin" and crud.count_users_by_role(db, "admin") <= 1:
+        raise HTTPException(
+            status_code=403, detail="Cannot delete the last admin")
+
     user = crud.delete_user(db, user_uuid)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
     logger.log_message(
-        f"Super admin {requesting_user.email} deleted user {user.email}.")
+        f"Admin {requesting_user.email} deleted user {user.email}.")
     return {"detail": "User successfully deleted"}
 
 
 @router.get("/get-pending-products/", tags=["Approval"], summary="Get list of products pending approval")
 def get_pending_products(
     credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: Session = Depends(database.get_session_local)
+    db: Session = Depends(database.get_session_local),
+    requesting_user: User = Depends(require_operator),
 ):
-    # Проверка токена и прав доступа
     token = credentials.credentials
-    token_data = auth.verify_token(token, db=db)
-    requesting_user = crud.get_user_by_id(db, uuid.UUID(token_data["sub"]))
-
-    if not requesting_user.is_superadmin:
-        raise HTTPException(
-            status_code=403, detail="Insufficient rights to view pending products")
 
     products_data = []
 

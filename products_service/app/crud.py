@@ -253,6 +253,15 @@ def delete_supplier(db: Session, supplier_id: str):
                 detail="Cannot delete supplier: there are products linked to this supplier."
             )
 
+        linked_documents = db.query(models.SupplierDocument).filter(
+            models.SupplierDocument.supplier_id == supplier_id
+        ).all()
+        if linked_documents:
+            raise HTTPException(
+                status_code=422,
+                detail="Cannot delete supplier: there are documents linked to this supplier."
+            )
+
         db.delete(supplier)
         db.commit()
         return {"message": "Supplier deleted"}

@@ -17,7 +17,7 @@ security = HTTPBearer()
 async def create_chat(chat_data: schemas.ChatCreate, db: Session = Depends(get_db), credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
     user_data = auth.verify_token_in_other_service(
-        token, require_admin=True)  # Требуем, чтобы был админ
+        token, minimum_role="operator")
     user_id = user_data["user_id"]
 
     if not user_data:
@@ -83,6 +83,14 @@ def get_chat_by_id_route(chat_id: UUID, db: Session = Depends(get_db), credentia
     chat = crud.get_chat_by_id(db, chat_id)
     if chat is None:
         raise HTTPException(status_code=404, detail="Chat not found")
+    current_user_uuid = UUID(user_data["user_id"])
+    if user_data.get("role") not in {"operator", "admin"} and not any(
+        participant.user_id == current_user_uuid for participant in chat.participants
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="User is not a participant of this chat"
+        )
     return {
         "id": str(chat.id),
         "name": chat.name,
@@ -125,7 +133,7 @@ async def get_chat_messages(chat_id: str, db: Session = Depends(get_db), credent
             status_code=400, detail="Invalid UUID format for user_id")
 
     # Проверяем, что пользователь состоит в чате
-    if not any(participant.user_id == current_user_uuid for participant in chat.participants):
+    if user_data.get("role") not in {"operator", "admin"} and not any(participant.user_id == current_user_uuid for participant in chat.participants):
         raise HTTPException(
             status_code=403,
             detail="User is not a participant of this chat"
@@ -206,7 +214,7 @@ def add_user_to_chat(
 ):
     token = credentials.credentials
     user_data = auth.verify_token_in_other_service(
-        token, require_admin=True)  # Проверяем, что это админ
+        token, minimum_role="operator")
 
     if not user_data:
         logger.log_message("Unauthorized access attempt")
