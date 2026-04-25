@@ -5,6 +5,7 @@ from fastapi.security import HTTPBearer
 from app import routes, database, logger, auth
 from app.kafka import start_consumer
 from fastapi.staticfiles import StaticFiles
+import os
 
 
 app = FastAPI(
@@ -15,9 +16,23 @@ app = FastAPI(
 # Добавляем схему безопасности OAuth2 с токенами
 security = HTTPBearer()
 
+DEFAULT_CORS_ORIGINS = (
+    "http://localhost:5173,http://127.0.0.1:5173,"
+    "http://localhost:8001,http://127.0.0.1:8001"
+)
+
+
+def _cors_origins():
+    return [
+        origin.strip()
+        for origin in os.getenv("CORS_ORIGINS", DEFAULT_CORS_ORIGINS).split(",")
+        if origin.strip()
+    ]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Либо список доменов
+    allow_origins=_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
